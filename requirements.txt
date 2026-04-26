@@ -1,0 +1,6 @@
+# RTT调试工具依赖清单
+PyQt5>=5.15.0
+pyinstaller>=5.0.0
+pylink-square>=2.0.0
+psutil>=5.2.2
+pefile>=2023.2.7
