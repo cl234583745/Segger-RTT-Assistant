@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 RTT Assistant - RTT调试助手
-版本: v1.2
+版本: v1.3
 作者: CodeArts Agent
 """
 

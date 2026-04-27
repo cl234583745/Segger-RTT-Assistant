@@ -6,6 +6,7 @@ JLink RTT SDK封装
 """
 
 import os
+import sys
 import struct
 import pylink
 from pylink import library
@@ -80,10 +81,25 @@ class JLinkRTTWrapper:
         # 根据Python位数选择DLL名称
         dll_name = "JLink_x64.dll" if python_bits == 64 else "JLinkARM.dll"
         
+        # 打包环境下获取基础目录
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(sys.executable)
+            try:
+                meipass_dir = sys._MEIPASS
+            except AttributeError:
+                meipass_dir = exe_dir
+        else:
+            exe_dir = None
+            meipass_dir = None
+        
         # 常见JLink安装路径
         possible_paths = [
             # 当前目录(优先)
             os.path.join(os.getcwd(), dll_name),
+            # 打包后exe所在目录
+            os.path.join(exe_dir, dll_name) if exe_dir else None,
+            # 打包后_MEIPASS目录
+            os.path.join(meipass_dir, dll_name) if meipass_dir else None,
             # V938a (支持64位)
             rf"D:\Program Files\SEGGER\JLink_V938a\{dll_name}",
             rf"C:\Program Files\SEGGER\JLink_V938a\{dll_name}",
@@ -102,7 +118,7 @@ class JLinkRTTWrapper:
         ]
         
         for path in possible_paths:
-            if os.path.exists(path):
+            if path and os.path.exists(path):
                 return path
         
         # 尝试在PATH环境变量中查找

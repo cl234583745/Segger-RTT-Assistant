@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('JLink_x64.dll', '.'),
+    ],
     datas=[
         ('README.md', '.'),
         ('更新说明.md', '.'),
@@ -12,8 +13,9 @@ a = Analysis(
         ('duokajiangfllpll.png', '.'),
         ('SEGGER_RTT.zip', '.'),
         ('icon.ico', '.'),
+        ('config.json', '.'),
     ],
-    hiddenimports=['pylink'],
+    hiddenimports=['pylink', 'pefile', 'psutil'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -29,7 +31,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='RTT-Assistant-v1.2',
+    name='Segger-RTT-Assistant v1.3',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
