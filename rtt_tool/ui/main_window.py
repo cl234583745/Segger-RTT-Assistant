@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle('RTT Assistant v1.2')
+        self.setWindowTitle('RTT Assistant v1.3.1')
         self.setGeometry(100, 100, 1000, 700)
         
         # 创建中心部件
@@ -548,7 +548,7 @@ class MainWindow(QMainWindow):
             os.startfile(changelog_file)
         else:
             QMessageBox.information(self, "升级日志",
-                "RTT Assistant v1.2\n\n"
+                "RTT Assistant v1.3.1\n\n"
                 "新增功能:\n"
                 "• 系统日志窗口\n"
                 "• 数据自动保存和导出\n"
@@ -594,7 +594,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         
         # 版本信息
-        version = QLabel("<p>版本: v1.2</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
+        version = QLabel("<p>版本: v1.3.1</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
         

@@ -8,14 +8,12 @@ env/
 venv/
 .venv/
 
-# PyInstaller
+# Build
 build/
 dist/
-*.spec
 
 # Logs
 *.log
-rtt_system.log
 rtt_data*.log
 rtt_data.txt
 
@@ -25,9 +23,6 @@ video/
 *.tmp
 *TEMP_MPY*
 ScreenShot*.png
-
-# Media
-reference.mp4
 
 # IDE
 .vscode/

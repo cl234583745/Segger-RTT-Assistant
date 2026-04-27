@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 RTT Assistant - RTT调试助手
-版本: v1.3
+版本: v1.3.1
 作者: CodeArts Agent
 """
 
@@ -43,7 +43,7 @@ def main():
     
     # 设置应用名称
     app.setApplicationName("RTT Assistant")
-    app.setApplicationVersion("1.2")
+    app.setApplicationVersion("1.3.1")
     
     # 设置应用图标
     icon_path = get_resource_path("icon.ico")

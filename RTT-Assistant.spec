@@ -31,7 +31,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Segger-RTT-Assistant v1.3',
+    name='Segger-RTT-Assistant v1.3.1',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
