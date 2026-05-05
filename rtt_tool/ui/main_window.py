@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.log_window = None  # 日志窗口
+        self.log_service = None  # 日志服务(由controller设置)
         self.last_config = {}  # 上次的连接配置
         
         # 收发数据日志文件
@@ -338,6 +339,11 @@ class MainWindow(QMainWindow):
         # 添加弹性空间
         self.status_bar.addWidget(QLabel(""), 1)
         
+        # J-Link硬件/固件信息(连接时显示)
+        self.jlink_info_label = QLabel("")
+        self.jlink_info_label.setStyleSheet("color: #666666;")
+        self.status_bar.addPermanentWidget(self.jlink_info_label)
+        
         # 重置按钮
         self.reset_btn = QPushButton("重置")
         self.reset_btn.setToolTip("重置收发计数")
@@ -358,7 +364,8 @@ class MainWindow(QMainWindow):
             self.last_config.get('device', 'Cortex-M4'),
             self.last_config.get('rtt_mode', 'auto'),
             self.last_config.get('rtt_range_start', ''),
-            self.last_config.get('rtt_range_end', '')
+            self.last_config.get('rtt_range_size', ''),
+            self.log_service
         )
         
         if dialog.exec_() == ConnectionDialog.Accepted:
@@ -465,6 +472,7 @@ class MainWindow(QMainWindow):
         
         if connected:
             self.status_label.setText("已连接")
+            self._update_jlink_hardware_info()
         else:
             self.status_label.setText("未连接")
     
@@ -575,16 +583,60 @@ class MainWindow(QMainWindow):
         # 打开文件夹
         os.startfile(folder)
     
+    def _update_jlink_hardware_info(self):
+        """从已连接的JLink读取硬件/固件信息并显示到状态栏"""
+        try:
+            if not hasattr(self, '_jlink_ref') or self._jlink_ref is None:
+                self.jlink_info_label.setText("")
+                return
+            j = self._jlink_ref
+            hw_ver = j.hardware_version
+            fw_ver = j.firmware_version
+            sn = j.serial_number
+            self.jlink_info_label.setText(f"SN:{sn} | HW:{hw_ver} | FW:{fw_ver}")
+        except Exception:
+            self.jlink_info_label.setText("")
+    
+    def _get_jlink_dll_info(self):
+        """读取J-Link DLL版本信息(仅软件信息，无需探针)"""
+        import os
+        try:
+            dll_path = os.path.join(os.getcwd(), "JLink_x64.dll")
+            if not os.path.exists(dll_path):
+                dll_path = os.path.join(os.getcwd(), "JLinkARM.dll")
+            if not os.path.exists(dll_path):
+                return None
+            
+            import pylink
+            from pylink import library
+            jlink_lib = library.Library(dllpath=dll_path)
+            j = pylink.JLink(lib=jlink_lib)
+            j.open()
+            
+            dll_ver = j.version
+            num_devices = j.num_supported_devices()
+            j.close()
+            
+            return (f"<p style='font-size:10px;'>"
+                    f"<b>J-Link DLL:</b> {dll_ver} | "
+                    f"<b>支持设备:</b> {num_devices}个"
+                    f"</p>")
+        except Exception as e:
+            return f"<p style='font-size:10px; color:#cc0000;'>J-Link DLL读取失败: {e}</p>"
+    
     def _on_about(self):
         """显示关于对话框"""
         from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton
         from PyQt5.QtGui import QPixmap
         from PyQt5.QtCore import Qt
         
+        # 读取J-Link DLL版本信息
+        jlink_info = self._get_jlink_dll_info()
+        
         # 创建自定义对话框
         dialog = QDialog(self)
         dialog.setWindowTitle("关于 RTT Assistant")
-        dialog.setFixedSize(450, 400)
+        dialog.setFixedSize(450, 450)
         
         layout = QVBoxLayout(dialog)
         
@@ -597,6 +649,13 @@ class MainWindow(QMainWindow):
         version = QLabel("<p>版本: v1.3.1</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
+        
+        # J-Link DLL信息
+        if jlink_info:
+            jlink_label = QLabel(jlink_info)
+            jlink_label.setAlignment(Qt.AlignCenter)
+            jlink_label.setStyleSheet("color: #666666;")
+            layout.addWidget(jlink_label)
         
         # 分隔线
         layout.addWidget(QLabel("<hr>"))

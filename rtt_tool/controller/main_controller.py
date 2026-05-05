@@ -31,6 +31,7 @@ class MainController(QObject):
         
         # 创建日志服务
         self.log_service = LogService()
+        self.window.log_service = self.log_service
         
         # 创建服务
         self.connection_service = ConnectionService(self.log_service)
@@ -105,7 +106,7 @@ class MainController(QObject):
             'rtt_mode': last_config.get('rtt_mode', 'auto'),
             'rtt_address': last_config.get('rtt_address', ''),
             'rtt_range_start': last_config.get('rtt_range_start', ''),
-            'rtt_range_end': last_config.get('rtt_range_end', ''),
+            'rtt_range_size': last_config.get('rtt_range_size', ''),
         }
         
         # 使用配置连接
@@ -128,11 +129,15 @@ class MainController(QObject):
     
     def _on_connected(self):
         """连接成功"""
+        jlink_wrapper = self.connection_service.get_jlink()
+        if jlink_wrapper and jlink_wrapper.jlink:
+            self.window._jlink_ref = jlink_wrapper.jlink
         self.window.set_connected(True)
         self.window.set_status("已连接")
     
     def _on_disconnected(self):
         """断开连接"""
+        self.window._jlink_ref = None
         self.window.set_connected(False)
         self.window.set_status("未连接")
     
@@ -219,7 +224,7 @@ class MainController(QObject):
             'rtt_mode': self.config_service.get('rtt_mode', 'auto'),
             'rtt_address': self.config_service.get('rtt_address', ''),
             'rtt_range_start': self.config_service.get('rtt_range_start', ''),
-            'rtt_range_end': self.config_service.get('rtt_range_end', ''),
+            'rtt_range_size': self.config_service.get('rtt_range_size', ''),
         }
         self.window.set_last_config(last_config)
     
@@ -241,8 +246,8 @@ class MainController(QObject):
         if 'rtt_range_start' in config:
             self.config_service.set('rtt_range_start', config['rtt_range_start'])
         
-        if 'rtt_range_end' in config:
-            self.config_service.set('rtt_range_end', config['rtt_range_end'])
+        if 'rtt_range_size' in config:
+            self.config_service.set('rtt_range_size', config['rtt_range_size'])
         
         # 保存到文件
         self.config_service.save()

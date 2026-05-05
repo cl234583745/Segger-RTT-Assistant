@@ -12,10 +12,9 @@ from ..infrastructure.jlink_rtt_wrapper import JLinkRTTWrapper
 class ConnectionService(QObject):
     """连接管理服务"""
     
-    # 信号定义
-    connected = pyqtSignal()  # 连接成功信号
-    disconnected = pyqtSignal()  # 断开连接信号
-    error_occurred = pyqtSignal(str)  # 错误信号
+    connected = pyqtSignal()
+    disconnected = pyqtSignal()
+    error_occurred = pyqtSignal(str)
     
     def __init__(self, log_service=None):
         super().__init__()
@@ -28,33 +27,22 @@ class ConnectionService(QObject):
         连接到MCU
         
         Args:
-            config: 连接配置字典，包含：
-                - device: MCU型号
-                - interface: 接口类型
-                - speed: 接口速度（kHz）
-                - jlink_path: JLink DLL路径（可选）
-                - serial_number: JLink序列号（可选）
-                - ip_address: JLink IP地址（可选）
-                - rtt_mode: RTT模式（auto/address/range）
-                - rtt_address: RTT控制块地址（可选）
+            config: 连接配置字典
         
         Returns:
             bool: 连接是否成功
         """
         try:
-            # 记录日志
             if self.log_service:
                 self.log_service.info(f'开始连接MCU: {config.get("device", "Cortex-M4")}')
             
-            # 创建JLink RTT封装
             if self.jlink is None:
                 if self.log_service:
                     self.log_service.info('初始化JLink RTT封装')
-                self.jlink = JLinkRTTWrapper(config.get('jlink_path'))
+                self.jlink = JLinkRTTWrapper(config.get('jlink_path'), log_service=self.log_service)
                 if self.log_service:
                     self.log_service.info(f'JLink DLL路径: {self.jlink.jlink_path}')
             
-            # 连接
             if self.log_service:
                 self.log_service.info(f'连接参数: 接口={config.get("interface", "SWD")}, 速度={config.get("speed", 4000)}kHz')
             
@@ -66,19 +54,41 @@ class ConnectionService(QObject):
                 ip_address=config.get('ip_address'),
             )
             
-            # 初始化RTT
+            rtt_mode = config.get('rtt_mode', 'auto')
             rtt_address = None
-            if config.get('rtt_mode') == 'address':
+            range_start = None
+            range_end = None
+            
+            if rtt_mode == 'address':
                 rtt_address_str = config.get('rtt_address', '')
                 if rtt_address_str:
                     rtt_address = int(rtt_address_str, 16)
                     if self.log_service:
                         self.log_service.info(f'使用指定RTT地址: 0x{rtt_address:X}')
+                        
+            elif rtt_mode == 'range':
+                range_start_str = config.get('rtt_range_start', '')
+                range_size_str = config.get('rtt_range_size', '')
+                if range_start_str and range_size_str:
+                    range_start = int(range_start_str, 16)
+                    range_size = int(range_size_str, 16)
+                    if range_size <= 0:
+                        raise ValueError(f"搜索大小无效: 大小(0x{range_size:X}) 必须>0")
+                    range_end = range_start + range_size
+                    if self.log_service:
+                        self.log_service.info(f'RTT搜索范围: 起始=0x{range_start:X}, 大小=0x{range_size:X}, 结束=0x{range_end:X}')
+                else:
+                    raise ValueError("搜索范围模式需要指定起始地址和大小")
             
             if self.log_service:
                 self.log_service.info('初始化RTT...')
             
-            self.jlink.init_rtt(rtt_address)
+            self.jlink.init_rtt(
+                rtt_address=rtt_address,
+                rtt_mode=rtt_mode,
+                range_start=range_start,
+                range_end=range_end,
+            )
             
             self.is_connected = True
             self.connected.emit()
@@ -114,10 +124,4 @@ class ConnectionService(QObject):
             self.log_service.success('已断开连接')
     
     def get_jlink(self):
-        """
-        获取JLink RTT封装对象
-        
-        Returns:
-            JLinkRTTWrapper: JLink RTT封装对象
-        """
         return self.jlink

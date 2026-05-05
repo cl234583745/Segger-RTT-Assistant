@@ -30,7 +30,7 @@ class ConfigService:
         "last_device": "Cortex-M4",  # 上次选择的设备型号
         "rtt_mode": "auto",  # RTT控制块模式: auto/address/range
         "rtt_range_start": "",  # RTT搜索范围起始地址
-        "rtt_range_end": "",  # RTT搜索范围结束地址
+        "rtt_range_size": "",  # RTT搜索范围大小
     }
     
     def __init__(self, config_file="config.json"):
