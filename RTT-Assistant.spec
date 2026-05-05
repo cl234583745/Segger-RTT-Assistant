@@ -3,9 +3,7 @@
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[
-        ('JLink_x64.dll', '.'),
-    ],
+    binaries=[],
     datas=[
         ('README.md', '.'),
         ('更新说明.md', '.'),
@@ -13,7 +11,6 @@ a = Analysis(
         ('duokajiangfllpll.png', '.'),
         ('SEGGER_RTT.zip', '.'),
         ('icon.ico', '.'),
-        ('config.json', '.'),
     ],
     hiddenimports=['pylink', 'pefile', 'psutil'],
     hookspath=[],
@@ -31,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Segger-RTT-Assistant v1.3.1',
+    name='Segger-RTT-Assistant v1.4',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -46,3 +43,17 @@ exe = EXE(
     entitlements_file=None,
     icon='icon.ico',
 )
+
+import shutil
+import glob
+
+dist_dir = os.path.join(SPECPATH, 'dist')
+os.makedirs(dist_dir, exist_ok=True)
+
+for f in ['config.json', 'devices.txt']:
+    src = os.path.join(SPECPATH, f)
+    if os.path.exists(src):
+        shutil.copy2(src, dist_dir)
+
+for dll in glob.glob(os.path.join(SPECPATH, 'JLink*.dll')):
+    shutil.copy2(dll, dist_dir)

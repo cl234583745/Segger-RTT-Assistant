@@ -15,7 +15,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QTextCursor
 from .connection_dialog import ConnectionDialog
 from .log_window import LogWindow
-from ..utils.resource_utils import get_resource_path, is_frozen
+from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file
 
 
 class MainWindow(QMainWindow):
@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle('RTT Assistant v1.3.1')
+        self.setWindowTitle('RTT Assistant v1.4')
         self.setGeometry(100, 100, 1000, 700)
         
         # 创建中心部件
@@ -851,10 +851,10 @@ class MainWindow(QMainWindow):
         """读取J-Link DLL版本信息(仅软件信息，无需探针)"""
         import os
         try:
-            dll_path = os.path.join(os.getcwd(), "JLink_x64.dll")
-            if not os.path.exists(dll_path):
-                dll_path = os.path.join(os.getcwd(), "JLinkARM.dll")
-            if not os.path.exists(dll_path):
+            dll_path = get_external_file("JLink_x64.dll")
+            if dll_path is None:
+                dll_path = get_external_file("JLinkARM.dll")
+            if dll_path is None:
                 return None
             
             import pylink
@@ -896,7 +896,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         
         # 版本信息
-        version = QLabel("<p>版本: v1.3.1</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
+        version = QLabel("<p>版本: v1.4</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
         

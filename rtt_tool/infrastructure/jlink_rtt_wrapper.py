@@ -95,10 +95,10 @@ class JLinkRTTWrapper:
         
         # 常见JLink安装路径
         possible_paths = [
-            # 当前目录(优先)
-            os.path.join(os.getcwd(), dll_name),
-            # 打包后exe所在目录
+            # 打包后exe所在目录(优先,与exe平级放置)
             os.path.join(exe_dir, dll_name) if exe_dir else None,
+            # 当前目录
+            os.path.join(os.getcwd(), dll_name),
             # 打包后_MEIPASS目录
             os.path.join(meipass_dir, dll_name) if meipass_dir else None,
             # V938a (支持64位)

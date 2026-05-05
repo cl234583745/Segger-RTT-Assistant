@@ -47,6 +47,55 @@ def get_base_dir() -> str:
         return project_root
 
 
+def get_exe_dir() -> str:
+    """
+    获取exe所在目录（打包环境）或项目根目录（开发环境）
+    
+    用于查找与exe平级放置的外部文件：
+    config.json、JLink_x64.dll、devices.txt
+    
+    Returns:
+        str: exe所在目录或项目根目录
+    """
+    if is_frozen():
+        return os.path.dirname(sys.executable)
+    else:
+        current_file = os.path.abspath(__file__)
+        utils_dir = os.path.dirname(current_file)
+        rtt_tool_dir = os.path.dirname(utils_dir)
+        project_root = os.path.dirname(rtt_tool_dir)
+        return project_root
+
+
+def get_external_file(filename: str) -> Optional[str]:
+    """
+    获取与exe平级放置的外部文件路径
+    
+    查找顺序：
+    1. exe所在目录（打包环境）或项目根目录（开发环境）
+    2. 当前工作目录
+    
+    Args:
+        filename: 文件名（如config.json、devices.txt、JLink_x64.dll）
+        
+    Returns:
+        Optional[str]: 文件绝对路径，不存在返回None
+    """
+    search_dirs = [get_exe_dir()]
+    cwd = os.path.abspath(os.getcwd())
+    if cwd != search_dirs[0]:
+        search_dirs.append(cwd)
+    
+    for d in search_dirs:
+        path = os.path.join(d, filename)
+        if os.path.exists(path):
+            logger.debug(f"外部文件找到: {filename} -> {path}")
+            return path
+    
+    logger.warning(f"外部文件未找到: {filename} (搜索目录: {search_dirs})")
+    return None
+
+
 def get_resource_path(relative_path: str) -> Optional[str]:
     """
     获取资源文件的绝对路径

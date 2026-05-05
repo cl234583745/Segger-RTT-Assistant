@@ -7,6 +7,7 @@
 
 import json
 import os
+from .resource_utils import get_exe_dir
 
 
 class ConfigService:
@@ -43,13 +44,15 @@ class ConfigService:
         },
     }
     
-    def __init__(self, config_file="config.json"):
+    def __init__(self, config_file=None):
         """
         初始化配置服务
         
         Args:
-            config_file: 配置文件路径
+            config_file: 配置文件路径，None则自动定位到exe所在目录
         """
+        if config_file is None:
+            config_file = os.path.join(get_exe_dir(), "config.json")
         self.config_file = config_file
         self.config = {}
         self.load()

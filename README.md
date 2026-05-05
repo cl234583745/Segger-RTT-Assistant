@@ -88,10 +88,12 @@ rtt_tool/
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name "RTT-Tool" main.py
+pyinstaller RTT-Assistant.spec
 ```
 
-打包后的exe文件位于`dist/RTT-Tool.exe`
+打包后的exe文件位于`dist/Segger-RTT-Assistant v1.4.exe`
+
+**注意**：config.json、JLink_x64.dll、devices.txt需与exe放在同一目录，不要打包进exe内部。
 
 ## 配置文件
 

@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QComboBox, QLabel, QFileDialog, QDialogButtonBox
 )
 from PyQt5.QtCore import Qt
+from ..utils.resource_utils import get_external_file, get_exe_dir
 
 
 class ConnectionDialog(QDialog):
@@ -244,11 +245,14 @@ class ConnectionDialog(QDialog):
         ]
         
         config_paths = [
+            get_external_file("devices.txt"),
             os.path.join(os.getcwd(), "devices.txt"),
             os.path.join(os.path.dirname(__file__), "..", "..", "devices.txt"),
         ]
         
         for config_path in config_paths:
+            if config_path is None:
+                continue
             if os.path.exists(config_path):
                 try:
                     devices = []
@@ -312,10 +316,10 @@ class ConnectionDialog(QDialog):
         from pylink import library
         import os
         
-        dll_path = os.path.join(os.getcwd(), "JLink_x64.dll")
-        if not os.path.exists(dll_path):
-            dll_path = os.path.join(os.getcwd(), "JLinkARM.dll")
-        if not os.path.exists(dll_path):
+        dll_path = get_external_file("JLink_x64.dll")
+        if dll_path is None:
+            dll_path = get_external_file("JLinkARM.dll")
+        if dll_path is None:
             err_msg = "未找到JLink DLL文件"
             if self.log_service:
                 self.log_service.error(f"更新设备列表失败: {err_msg}")
@@ -364,7 +368,7 @@ class ConnectionDialog(QDialog):
             
             devices.sort()
             
-            devices_file = os.path.join(os.getcwd(), "devices.txt")
+            devices_file = os.path.join(get_exe_dir(), "devices.txt")
             with open(devices_file, 'w', encoding='utf-8') as f:
                 f.write("# RTT Assistant - 支持的设备型号列表\n")
                 f.write(f"# 从J-Link DLL自动生成, 共{len(devices)}个设备\n")
