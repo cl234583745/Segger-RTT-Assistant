@@ -62,6 +62,14 @@ class MainController(QObject):
         self.window.config_changed.connect(self._on_config_changed)
         self.window.reset_counters_requested.connect(self._on_reset_counters)
         
+        # ANSI染色开关
+        if hasattr(self.window, 'ansi_color_action'):
+            self.window.ansi_color_action.toggled.connect(self._on_ansi_color_toggled)
+        
+        # 关键字高亮开关
+        if hasattr(self.window, 'keyword_highlight_action'):
+            self.window.keyword_highlight_action.toggled.connect(self._on_keyword_highlight_toggled)
+        
         # 连接服务信号 -> 控制器
         self.connection_service.connected.connect(self._on_connected)
         self.connection_service.disconnected.connect(self._on_disconnected)
@@ -227,6 +235,21 @@ class MainController(QObject):
             'rtt_range_size': self.config_service.get('rtt_range_size', ''),
         }
         self.window.set_last_config(last_config)
+        
+        # 恢复ANSI染色开关
+        ansi_enabled = self.config_service.get('ansi_color_enabled', False)
+        if hasattr(self.window, 'ansi_color_action'):
+            self.window.ansi_color_action.setChecked(ansi_enabled)
+        
+        # 恢复关键字高亮开关
+        keyword_enabled = self.config_service.get('keyword_highlight_enabled', True)
+        if hasattr(self.window, 'keyword_highlight_action'):
+            self.window.keyword_highlight_action.setChecked(keyword_enabled)
+        
+        # 恢复关键字高亮规则
+        keyword_rules = self.config_service.get('keyword_rules', {})
+        if keyword_rules:
+            self.window._keyword_rules = dict(keyword_rules)
     
     def _on_config_changed(self, config):
         """配置改变"""
@@ -251,6 +274,21 @@ class MainController(QObject):
         
         # 保存到文件
         self.config_service.save()
+    
+    def _on_ansi_color_toggled(self, checked):
+        """ANSI染色开关切换"""
+        self.config_service.set('ansi_color_enabled', checked)
+        self.config_service.save()
+    
+    def _on_keyword_highlight_toggled(self, checked):
+        """关键字高亮开关切换"""
+        self.config_service.set('keyword_highlight_enabled', checked)
+        self.config_service.save()
+        
+        keyword_rules = getattr(self.window, '_keyword_rules', {})
+        if keyword_rules:
+            self.config_service.set('keyword_rules', keyword_rules)
+            self.config_service.save()
     
     def show(self):
         """显示窗口"""

@@ -31,6 +31,16 @@ class ConfigService:
         "rtt_mode": "auto",  # RTT控制块模式: auto/address/range
         "rtt_range_start": "",  # RTT搜索范围起始地址
         "rtt_range_size": "",  # RTT搜索范围大小
+        "ansi_color_enabled": False,  # ANSI转义码染色开关
+        "keyword_highlight_enabled": True,  # 关键字高亮开关
+        "keyword_rules": {  # 关键字高亮规则
+            "ERROR": "#ff0000",
+            "WARN": "#ffff00",
+            "WARNING": "#ffff00",
+            "FAIL": "#ff0000",
+            "OK": "#00ff00",
+            "SUCCESS": "#00ff00",
+        },
     }
     
     def __init__(self, config_file="config.json"):

@@ -16,5 +16,18 @@
     "last_device": "R9A07G084M04",
     "rtt_mode": "address",
     "rtt_range_start": null,
-    "rtt_range_end": null
+    "rtt_range_end": "0x1000",
+    "rtt_range_size": null,
+    "no_reset": false,
+    "ansi_color_enabled": false,
+    "keyword_rules": {
+        "ERROR": "#ff0000",
+        "WARN": "#ffff00",
+        "WARNING": "#ffff00",
+        "FAIL": "#ff0000",
+        "OK": "#00ff00",
+        "SUCCESS": "#00ff00",
+        "INFO": "#0055ff"
+    },
+    "keyword_highlight_enabled": false
 }

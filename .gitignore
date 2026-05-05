@@ -27,6 +27,8 @@ ScreenShot*.png
 # IDE
 .vscode/
 .idea/
+.arts/
+.codeartsdoer/
 *.swp
 *.swo
 

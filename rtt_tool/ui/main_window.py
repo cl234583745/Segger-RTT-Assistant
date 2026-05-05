@@ -161,12 +161,6 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
         
-        # 字体设置
-        font_action = QAction("字体", self)
-        font_action.setToolTip("设置字体")
-        font_action.triggered.connect(self._on_font_clicked)
-        toolbar.addAction(font_action)
-        
         # 窗口置顶
         self.topmost_checkbox = QCheckBox("置顶")
         self.topmost_checkbox.setToolTip("窗口置顶")
@@ -178,6 +172,49 @@ class MainWindow(QMainWindow):
         )
         self.topmost_checkbox.stateChanged.connect(self.show)
         toolbar.addWidget(self.topmost_checkbox)
+        
+        toolbar.addSeparator()
+        
+        # 工具菜单
+        tool_menu = QMenu("工具", self)
+        
+        # 字体设置
+        font_action = QAction("字体", self)
+        font_action.setToolTip("设置字体")
+        font_action.triggered.connect(self._on_font_clicked)
+        tool_menu.addAction(font_action)
+        
+        tool_menu.addSeparator()
+        
+        # ANSI转义码染色开关
+        self.ansi_color_action = QAction("ANSI染色", self)
+        self.ansi_color_action.setCheckable(True)
+        self.ansi_color_action.setChecked(False)
+        self.ansi_color_action.setToolTip("解析ANSI转义码进行颜色渲染(默认关闭)")
+        tool_menu.addAction(self.ansi_color_action)
+        
+        # 关键字高亮(含子菜单)
+        keyword_menu = QMenu("关键字高亮", self)
+        
+        self.keyword_highlight_action = QAction("启用", self)
+        self.keyword_highlight_action.setCheckable(True)
+        self.keyword_highlight_action.setChecked(True)
+        self.keyword_highlight_action.setToolTip("启用关键字高亮(默认开启)")
+        keyword_menu.addAction(self.keyword_highlight_action)
+        
+        keyword_menu.addSeparator()
+        
+        keyword_config_action = QAction("规则配置", self)
+        keyword_config_action.setToolTip("配置关键字高亮规则")
+        keyword_config_action.triggered.connect(self._on_keyword_highlight)
+        keyword_menu.addAction(keyword_config_action)
+        
+        tool_menu.addMenu(keyword_menu)
+        
+        # 添加工具菜单按钮
+        tool_button = QPushButton("工具")
+        tool_button.setMenu(tool_menu)
+        toolbar.addWidget(tool_button)
         
         toolbar.addSeparator()
         
@@ -432,12 +469,189 @@ class MainWindow(QMainWindow):
     
     def _on_font_clicked(self):
         """字体按钮点击"""
-        # TODO: 显示字体对话框
         from PyQt5.QtWidgets import QFontDialog
         font, ok = QFontDialog.getFont(self.receive_text.font(), self)
         if ok:
             self.receive_text.setFont(font)
             self.font_changed.emit(font)
+    
+    def _on_keyword_highlight(self):
+        """关键字高亮配置"""
+        from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, 
+                                     QTableWidgetItem, QPushButton, QHeaderView, QColorDialog)
+        from PyQt5.QtGui import QColor
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("关键字高亮配置")
+        dialog.resize(500, 350)
+        layout = QVBoxLayout(dialog)
+        
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels(["关键字", "颜色"])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        
+        default_colors = {
+            "ERROR": "#ff0000",
+            "WARN": "#ffff00",
+            "WARNING": "#ffff00",
+            "FAIL": "#ff0000",
+            "OK": "#00ff00",
+            "SUCCESS": "#00ff00",
+        }
+        
+        rules = getattr(self, '_keyword_rules', None)
+        if rules is None:
+            rules = dict(default_colors)
+        
+        for keyword, color in rules.items():
+            row = table.rowCount()
+            table.insertRow(row)
+            table.setItem(row, 0, QTableWidgetItem(keyword))
+            color_item = QTableWidgetItem(color)
+            color_item.setForeground(QColor(color))
+            table.setItem(row, 1, color_item)
+        
+        btn_layout = QHBoxLayout()
+        
+        add_btn = QPushButton("添加")
+        def on_add():
+            row = table.rowCount()
+            table.insertRow(row)
+            table.setItem(row, 0, QTableWidgetItem(""))
+            table.setItem(row, 1, QTableWidgetItem("#ff0000"))
+        add_btn.clicked.connect(on_add)
+        btn_layout.addWidget(add_btn)
+        
+        del_btn = QPushButton("删除")
+        del_btn.clicked.connect(lambda: table.removeRow(table.currentRow()) if table.currentRow() >= 0 else None)
+        btn_layout.addWidget(del_btn)
+        
+        color_btn = QPushButton("选择颜色")
+        def on_pick_color():
+            row = table.currentRow()
+            if row >= 0:
+                color = QColorDialog.getColor(QColor("#ff0000"), dialog, "选择颜色")
+                if color.isValid():
+                    table.item(row, 1).setText(color.name())
+                    table.item(row, 1).setForeground(color)
+        color_btn.clicked.connect(on_pick_color)
+        btn_layout.addWidget(color_btn)
+        
+        btn_layout.addStretch()
+        layout.addWidget(table)
+        layout.addLayout(btn_layout)
+        
+        ok_btn = QPushButton("确定")
+        ok_layout = QHBoxLayout()
+        ok_layout.addStretch()
+        ok_layout.addWidget(ok_btn)
+        ok_layout.addStretch()
+        layout.addLayout(ok_layout)
+        
+        ok_btn.clicked.connect(dialog.accept)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            self._keyword_rules = {}
+            for row in range(table.rowCount()):
+                kw_item = table.item(row, 0)
+                color_item = table.item(row, 1)
+                if kw_item and color_item and kw_item.text().strip():
+                    self._keyword_rules[kw_item.text().strip()] = color_item.text()
+            # 保存到配置
+            if self.log_service:
+                try:
+                    from rtt_tool.utils.config_service import ConfigService
+                    cs = ConfigService()
+                    cs.set('keyword_rules', self._keyword_rules)
+                    cs.save()
+                except:
+                    pass
+    
+    def _parse_ansi_and_insert(self, text):
+        """
+        解析ANSI转义码并插入带颜色的文本到接收区
+        
+        Args:
+            text: 可能包含ANSI转义码的文本
+        """
+        import re
+        from PyQt5.QtGui import QTextCharFormat, QColor
+        
+        ANSI_COLOR_MAP = {
+            30: "#555555", 31: "#ff0000", 32: "#00ff00", 33: "#ffff00",
+            34: "#0000ff", 35: "#ff00ff", 36: "#00ffff", 37: "#ffffff",
+            90: "#888888", 91: "#ff6666", 92: "#66ff66", 93: "#ffff66",
+            94: "#6666ff", 95: "#ff66ff", 96: "#66ffff", 97: "#ffffff",
+        }
+        
+        cursor = self.receive_text.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        
+        default_format = cursor.charFormat()
+        current_format = QTextCharFormat(default_format)
+        
+        pattern = re.compile(r'\x1B\[([\d;]*)m')
+        last_end = 0
+        
+        for match in pattern.finditer(text):
+            if match.start() > last_end:
+                plain = text[last_end:match.start()]
+                cursor.setCharFormat(current_format)
+                cursor.insertText(plain)
+            
+            codes = match.group(1)
+            if not codes:
+                current_format = QTextCharFormat(default_format)
+            else:
+                for code in codes.split(';'):
+                    code = int(code) if code.isdigit() else 0
+                    if code == 0:
+                        current_format = QTextCharFormat(default_format)
+                    elif code in ANSI_COLOR_MAP:
+                        current_format.setForeground(QColor(ANSI_COLOR_MAP[code]))
+                    elif code == 1:
+                        f = QTextCharFormat(current_format)
+                        current_format = f
+            
+            last_end = match.end()
+        
+        if last_end < len(text):
+            remaining = text[last_end:]
+            cursor.setCharFormat(current_format)
+            cursor.insertText(remaining)
+        
+        self.receive_text.moveCursor(QTextCursor.End)
+    
+    def _apply_keyword_highlight(self, text, cursor):
+        """
+        对非ANSI着色的文本应用关键字高亮
+        
+        Args:
+            text: 纯文本
+            cursor: QTextCursor
+        """
+        from PyQt5.QtGui import QTextCharFormat, QColor
+        
+        rules = getattr(self, '_keyword_rules', {})
+        if not rules:
+            return
+        
+        for keyword, color in rules.items():
+            pos = 0
+            while True:
+                idx = text.find(keyword, pos)
+                if idx == -1:
+                    break
+                
+                cursor.setPosition(cursor.document().characterCount() - len(text) + idx)
+                cursor.setPosition(cursor.position() + len(keyword), QTextCursor.KeepAnchor)
+                
+                fmt = QTextCharFormat(cursor.charFormat())
+                fmt.setForeground(QColor(color))
+                cursor.mergeCharFormat(fmt)
+                
+                pos = idx + len(keyword)
     
     def append_receive_data(self, text):
         """
@@ -446,16 +660,52 @@ class MainWindow(QMainWindow):
         Args:
             text: 要追加的文本
         """
-        self.receive_text.moveCursor(QTextCursor.End)
-        self.receive_text.insertPlainText(text)
-        self.receive_text.moveCursor(QTextCursor.End)
+        ansi_enabled = hasattr(self, 'ansi_color_action') and self.ansi_color_action.isChecked()
+        keyword_enabled = hasattr(self, 'keyword_highlight_action') and self.keyword_highlight_action.isChecked()
+        keyword_rules = getattr(self, '_keyword_rules', {}) if keyword_enabled else {}
+        has_ansi = '\x1B' in text if text else False
         
-        # 保存到数据日志文件
+        if ansi_enabled and has_ansi:
+            self._parse_ansi_and_insert(text)
+        elif keyword_rules:
+            self.receive_text.moveCursor(QTextCursor.End)
+            self.receive_text.insertPlainText(text)
+            self.receive_text.moveCursor(QTextCursor.End)
+            
+            for keyword, color in keyword_rules.items():
+                if keyword in text:
+                    from PyQt5.QtGui import QTextCharFormat, QColor
+                    fmt = QTextCharFormat()
+                    fmt.setForeground(QColor(color))
+                    doc = self.receive_text.document()
+                    cursor = QTextCursor(doc)
+                    cursor.movePosition(QTextCursor.End)
+                    end_pos = cursor.position()
+                    search_pos = max(0, end_pos - len(text) - len(keyword))
+                    
+                    cursor.setPosition(search_pos)
+                    while True:
+                        found = doc.find(keyword, cursor)
+                        if found.isNull() or found.selectionStart() < search_pos or found.selectionEnd() > end_pos:
+                            break
+                        found.mergeCharFormat(fmt)
+                        cursor = QTextCursor(doc)
+                        cursor.setPosition(found.selectionEnd())
+            
+            self.receive_text.moveCursor(QTextCursor.End)
+        else:
+            self.receive_text.moveCursor(QTextCursor.End)
+            self.receive_text.insertPlainText(text)
+            self.receive_text.moveCursor(QTextCursor.End)
+        
+        # 保存到数据日志文件(去除ANSI码)
         if self.data_log_handle:
             try:
                 from datetime import datetime
+                import re
                 timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-                self.data_log_handle.write(f"[{timestamp}] [RX] {text}\n")
+                clean_text = re.sub(r'\x1B\[[\d;]*m', '', text) if has_ansi else text
+                self.data_log_handle.write(f"[{timestamp}] [RX] {clean_text}\n")
                 self.data_log_handle.flush()
             except:
                 pass
