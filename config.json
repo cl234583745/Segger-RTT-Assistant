@@ -29,5 +29,5 @@
         "SUCCESS": "#00ff00",
         "INFO": "#0055ff"
     },
-    "keyword_highlight_enabled": false
+    "keyword_highlight_enabled": true
 }

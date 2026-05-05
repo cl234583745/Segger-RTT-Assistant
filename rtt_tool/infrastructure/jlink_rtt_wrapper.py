@@ -9,8 +9,10 @@ import os
 import sys
 import struct
 import time
+import atexit
 import pylink
 from pylink import library
+from ..utils.resource_utils import get_external_file
 
 
 class JLinkRTTWrapper:
@@ -68,61 +70,23 @@ class JLinkRTTWrapper:
         # 将JLink目录添加到PATH环境变量
         if jlink_dir not in os.environ.get('PATH', ''):
             os.environ['PATH'] = jlink_dir + os.pathsep + os.environ.get('PATH', '')
+        
+        atexit.register(self._safe_disconnect)
     
     def _find_jlink_dll(self):
         """
         自动查找JLinkARM.dll
         
+        查找顺序：
+        1. exe所在目录（打包后与exe平级放置）
+        2. 当前工作目录
+        
         Returns:
             str: DLL路径，未找到返回None
         """
-        # 检查Python位数
         python_bits = struct.calcsize('P') * 8
-        
-        # 根据Python位数选择DLL名称
         dll_name = "JLink_x64.dll" if python_bits == 64 else "JLinkARM.dll"
-        
-        # 打包环境下获取基础目录
-        if getattr(sys, 'frozen', False):
-            exe_dir = os.path.dirname(sys.executable)
-        else:
-            exe_dir = None
-        
-        # 常见JLink安装路径
-        possible_paths = [
-            # 打包后exe所在目录(优先,与exe平级放置)
-            os.path.join(exe_dir, dll_name) if exe_dir else None,
-            # 当前目录
-            os.path.join(os.getcwd(), dll_name),
-            # V938a (支持64位)
-            rf"D:\Program Files\SEGGER\JLink_V938a\{dll_name}",
-            rf"C:\Program Files\SEGGER\JLink_V938a\{dll_name}",
-            # V930
-            rf"D:\Program Files\SEGGER\JLink_V930\{dll_name}",
-            rf"C:\Program Files\SEGGER\JLink_V930\{dll_name}",
-            rf"C:\Program Files (x86)\SEGGER\JLink_V930\{dll_name}",
-            # V940
-            rf"D:\Program Files\SEGGER\JLink_V940\{dll_name}",
-            rf"C:\Program Files\SEGGER\JLink_V940\{dll_name}",
-            rf"C:\Program Files (x86)\SEGGER\JLink_V940\{dll_name}",
-            # V950
-            rf"D:\Program Files\SEGGER\JLink_V950\{dll_name}",
-            rf"C:\Program Files\SEGGER\JLink_V950\{dll_name}",
-            rf"C:\Program Files (x86)\SEGGER\JLink_V950\{dll_name}",
-        ]
-        
-        for path in possible_paths:
-            if path and os.path.exists(path):
-                return path
-        
-        # 尝试在PATH环境变量中查找
-        path_env = os.environ.get('PATH', '')
-        for path_dir in path_env.split(os.pathsep):
-            dll_path = os.path.join(path_dir, dll_name)
-            if os.path.exists(dll_path):
-                return dll_path
-        
-        return None
+        return get_external_file(dll_name)
     
     def _log(self, level, msg):
         """输出日志"""
@@ -387,6 +351,9 @@ class JLinkRTTWrapper:
         except Exception as e:
             raise RuntimeError(f"RTT写入失败: {e}")
     
-    def __del__(self):
-        """析构函数，确保断开连接"""
-        self.disconnect()
+    def _safe_disconnect(self):
+        """安全断开连接(atexit回调)"""
+        try:
+            self.disconnect()
+        except:
+            pass

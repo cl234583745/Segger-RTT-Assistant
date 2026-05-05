@@ -12,8 +12,8 @@ from ..infrastructure.ring_buffer import RingBuffer
 class DataReceiveThread(QThread):
     """数据接收线程"""
     
-    # 信号定义
-    data_received = pyqtSignal(bytes)  # 数据接收信号
+    data_received = pyqtSignal(bytes)
+    error_occurred = pyqtSignal(str)
     
     def __init__(self, jlink, buffer_size=8192):
         """
@@ -48,7 +48,7 @@ class DataReceiveThread(QThread):
                 self.msleep(1)
                 
             except Exception as e:
-                # 发生错误，停止线程
+                self.error_occurred.emit(str(e))
                 self.running = False
                 break
     
@@ -91,9 +91,9 @@ class DataReceiveService(QObject):
         if self.receive_thread is not None and self.receive_thread.isRunning():
             return
         
-        # 创建接收线程
         self.receive_thread = DataReceiveThread(jlink)
         self.receive_thread.data_received.connect(self.data_received)
+        self.receive_thread.error_occurred.connect(self.error_occurred)
         self.receive_thread.start()
     
     def stop_receive(self):

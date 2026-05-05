@@ -10,6 +10,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from datetime import datetime
 from ..utils.resource_utils import get_exe_dir
 import os
+import atexit
 
 
 class LogService(QObject):
@@ -35,11 +36,11 @@ class LogService(QObject):
         # 打开日志文件(追加模式)
         try:
             self.log_file = open(self.log_file_path, 'a', encoding='utf-8')
-            # 写入分隔线
             self.log_file.write(f"\n{'='*60}\n")
             self.log_file.write(f"RTT Assistant 启动 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             self.log_file.write(f"{'='*60}\n")
             self.log_file.flush()
+            atexit.register(self._close_log_file)
         except Exception as e:
             print(f"无法打开日志文件: {e}")
             self.log_file = None
@@ -134,10 +135,11 @@ class LogService(QObject):
             return f"读取日志文件失败: {e}"
         return ""
     
-    def __del__(self):
-        """析构函数,关闭日志文件"""
+    def _close_log_file(self):
+        """关闭日志文件(atexit回调)"""
         if self.log_file:
             try:
                 self.log_file.close()
             except:
                 pass
+            self.log_file = None

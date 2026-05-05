@@ -15,7 +15,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QTextCursor
 from .connection_dialog import ConnectionDialog
 from .log_window import LogWindow
-from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file
+from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file, get_exe_dir
 
 
 class MainWindow(QMainWindow):
@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
         from datetime import datetime
         import os
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.data_log_file = f"rtt_data_{timestamp}.log"
+        self.data_log_file = os.path.join(get_exe_dir(), f"rtt_data_{timestamp}.log")
         self.data_log_handle = None
         
         # 打开数据日志文件
@@ -822,13 +822,7 @@ class MainWindow(QMainWindow):
         import os
         import sys
         
-        # 获取当前目录
-        if getattr(sys, 'frozen', False):
-            # 打包后
-            folder = os.path.dirname(sys.executable)
-        else:
-            # 开发模式
-            folder = os.getcwd()
+        folder = get_exe_dir()
         
         # 打开文件夹
         os.startfile(folder)
@@ -863,9 +857,11 @@ class MainWindow(QMainWindow):
             j = pylink.JLink(lib=jlink_lib)
             j.open()
             
-            dll_ver = j.version
-            num_devices = j.num_supported_devices()
-            j.close()
+            try:
+                dll_ver = j.version
+                num_devices = j.num_supported_devices()
+            finally:
+                j.close()
             
             return (f"<p style='font-size:10px;'>"
                     f"<b>J-Link DLL:</b> {dll_ver} | "

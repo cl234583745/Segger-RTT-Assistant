@@ -62,19 +62,18 @@ class DataSendService(QObject):
             data: 要发送的数据（bytes）
         
         Returns:
-            int: 实际发送的字节数
+            int: 请求发送的字节数（实际发送结果通过data_sent信号返回）
         """
         if self.jlink is None:
             self.error_occurred.emit("未连接到MCU")
             return 0
         
         try:
-            # 在工作线程中发送数据
             self.worker = SendWorker(self.jlink, data)
             self.worker.finished.connect(self._on_send_finished)
             self.worker.error.connect(self._on_send_error)
             self.worker.start()
-            return len(data)
+            return -1
             
         except Exception as e:
             self.error_occurred.emit(str(e))
@@ -97,7 +96,7 @@ class DataSendService(QObject):
             add_newline: 是否添加换行符
         
         Returns:
-            int: 实际发送的字节数
+            int: -1=异步发送中, 0=失败
         """
         if add_newline:
             text += "\n"
@@ -113,7 +112,7 @@ class DataSendService(QObject):
             hex_str: HEX字符串（如"01 02 03"）
         
         Returns:
-            int: 实际发送的字节数
+            int: -1=异步发送中, 0=失败
         """
         try:
             # 移除空格

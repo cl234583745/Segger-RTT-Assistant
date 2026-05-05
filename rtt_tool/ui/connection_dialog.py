@@ -244,15 +244,10 @@ class ConnectionDialog(QDialog):
             "R9A07G084M04",
         ]
         
-        config_paths = [
-            get_external_file("devices.txt"),
-            os.path.join(os.getcwd(), "devices.txt"),
-            os.path.join(os.path.dirname(__file__), "..", "..", "devices.txt"),
-        ]
+        ext_file = get_external_file("devices.txt")
+        config_paths = [ext_file] if ext_file else []
         
         for config_path in config_paths:
-            if config_path is None:
-                continue
             if os.path.exists(config_path):
                 try:
                     devices = []
@@ -330,34 +325,37 @@ class ConnectionDialog(QDialog):
             jlink_lib = library.Library(dllpath=dll_path)
             jlink = pylink.JLink(lib=jlink_lib)
             jlink.open()
-            num_devices = jlink.num_supported_devices()
             
-            if self.log_service:
-                self.log_service.info(f"开始从DLL读取设备列表, 共{num_devices}个设备")
-            
-            progress = QProgressDialog(f"正在从DLL读取{num_devices}个设备...", "取消", 0, num_devices, self)
-            progress.setWindowTitle("更新设备列表")
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0)
-            progress.show()
-            
-            devices = []
-            for i in range(num_devices):
-                if progress.wasCanceled():
-                    break
-                try:
-                    d = jlink.supported_device(i)
-                    if d and d.name:
-                        devices.append(d.name)
-                except:
-                    pass
-                if i % 200 == 0:
-                    progress.setValue(i)
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-            
-            progress.setValue(num_devices)
-            jlink.close()
+            try:
+                num_devices = jlink.num_supported_devices()
+                
+                if self.log_service:
+                    self.log_service.info(f"开始从DLL读取设备列表, 共{num_devices}个设备")
+                
+                progress = QProgressDialog(f"正在从DLL读取{num_devices}个设备...", "取消", 0, num_devices, self)
+                progress.setWindowTitle("更新设备列表")
+                progress.setWindowModality(Qt.WindowModal)
+                progress.setMinimumDuration(0)
+                progress.show()
+                
+                devices = []
+                for i in range(num_devices):
+                    if progress.wasCanceled():
+                        break
+                    try:
+                        d = jlink.supported_device(i)
+                        if d and d.name:
+                            devices.append(d.name)
+                    except:
+                        pass
+                    if i % 200 == 0:
+                        progress.setValue(i)
+                        from PyQt5.QtWidgets import QApplication
+                        QApplication.processEvents()
+                
+                progress.setValue(num_devices)
+            finally:
+                jlink.close()
             
             if not devices:
                 err_msg = "未能从DLL读取到设备列表"
