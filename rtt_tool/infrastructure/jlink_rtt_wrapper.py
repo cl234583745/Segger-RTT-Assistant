@@ -85,13 +85,8 @@ class JLinkRTTWrapper:
         # 打包环境下获取基础目录
         if getattr(sys, 'frozen', False):
             exe_dir = os.path.dirname(sys.executable)
-            try:
-                meipass_dir = sys._MEIPASS
-            except AttributeError:
-                meipass_dir = exe_dir
         else:
             exe_dir = None
-            meipass_dir = None
         
         # 常见JLink安装路径
         possible_paths = [
@@ -99,8 +94,6 @@ class JLinkRTTWrapper:
             os.path.join(exe_dir, dll_name) if exe_dir else None,
             # 当前目录
             os.path.join(os.getcwd(), dll_name),
-            # 打包后_MEIPASS目录
-            os.path.join(meipass_dir, dll_name) if meipass_dir else None,
             # V938a (支持64位)
             rf"D:\Program Files\SEGGER\JLink_V938a\{dll_name}",
             rf"C:\Program Files\SEGGER\JLink_V938a\{dll_name}",

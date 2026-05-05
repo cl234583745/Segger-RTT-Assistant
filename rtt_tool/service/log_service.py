@@ -8,6 +8,7 @@
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from datetime import datetime
+from ..utils.resource_utils import get_exe_dir
 import os
 
 
@@ -29,7 +30,7 @@ class LogService(QObject):
         self.max_logs = 1000  # 最大日志数量
         
         # 日志文件路径
-        self.log_file_path = os.path.join(os.getcwd(), 'rtt_system.log')
+        self.log_file_path = os.path.join(get_exe_dir(), 'rtt_system.log')
         
         # 打开日志文件(追加模式)
         try:

@@ -18,11 +18,12 @@ def exception_hook(exctype, value, traceback):
     error_msg = f"{exctype.__name__}: {value}"
     print(f"错误: {error_msg}")
     
-    # 写入系统日志文件
     try:
         from datetime import datetime
+        from rtt_tool.utils.resource_utils import get_exe_dir
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-        with open('rtt_system.log', 'a', encoding='utf-8') as f:
+        log_path = os.path.join(get_exe_dir(), 'rtt_system.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] [ERROR] {error_msg}\n")
     except:
         pass
