@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys
+sys.path.insert(0, '.')
+from rtt_tool import __version__
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -28,7 +32,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Segger-RTT-Assistant v1.4',
+    name=f'Segger-RTT-Assistant v{__version__}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

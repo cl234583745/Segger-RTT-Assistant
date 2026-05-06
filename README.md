@@ -17,7 +17,8 @@
 - ✅ 关键字高亮（ERROR/WARN/OK/INFO等，支持自定义规则）
 - ✅ RTT搜索日志增强（memory zones、buffer信息）
 - ✅ RTT范围搜索模式（起始地址+大小）
-- ✅ 设备列表从DLL更新
+- ✅ 设备列表从DLL更新（完整属性读取，v2结构化格式）
+- ✅ 连接时设备信息日志打印
 - ✅ J-Link DLL版本/设备数显示，状态栏显示SN/HW/FW
 
 ## 系统要求
@@ -90,6 +91,8 @@ rtt_tool/
 │   └── ring_buffer.py           # 环形缓冲区
 └── utils/                  # 工具类
     ├── config_service.py        # 配置管理
+    ├── device_info.py           # 设备信息数据模型
+    ├── device_info_service.py   # 设备信息服务（读取/持久化/日志）
     ├── resource_utils.py        # 资源路径工具
     └── data_format_service.py   # 数据格式化
 ```
@@ -103,7 +106,7 @@ pip install pyinstaller
 pyinstaller RTT-Assistant.spec
 ```
 
-打包后的exe文件位于`dist/Segger-RTT-Assistant v1.4.exe`
+打包后的exe文件位于`dist/Segger-RTT-Assistant vx.x.x.exe`
 
 **注意**：`config.json`、`JLink_x64.dll`、`devices.txt`需与exe放在同一目录。打包脚本会自动复制这些文件到dist目录。
 

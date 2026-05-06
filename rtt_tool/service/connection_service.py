@@ -7,6 +7,7 @@
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from ..infrastructure.jlink_rtt_wrapper import JLinkRTTWrapper
+from ..utils.device_info_service import DeviceInfoService
 
 
 class ConnectionService(QObject):
@@ -21,6 +22,7 @@ class ConnectionService(QObject):
         self.jlink = None
         self.is_connected = False
         self.log_service = log_service
+        self._device_info_service = DeviceInfoService(log_service=log_service)
     
     def connect(self, config):
         """
@@ -46,8 +48,17 @@ class ConnectionService(QObject):
             if self.log_service:
                 self.log_service.info(f'连接参数: 接口={config.get("interface", "SWD")}, 速度={config.get("speed", 4000)}kHz')
             
+            device_name = config.get('device', 'Cortex-M4')
+            try:
+                device_info = self._device_info_service.get_device_info(device_name)
+                log_msg = self._device_info_service.format_device_log(device_info, device_name)
+                if self.log_service:
+                    self.log_service.info(log_msg)
+            except Exception:
+                pass
+            
             self.jlink.connect(
-                device=config.get('device', 'Cortex-M4'),
+                device=device_name,
                 interface=config.get('interface', 'SWD'),
                 speed=config.get('speed', 4000),
                 serial_number=config.get('serial_number'),

@@ -16,6 +16,7 @@ from PyQt5.QtGui import QFont, QTextCursor
 from .connection_dialog import ConnectionDialog
 from .log_window import LogWindow
 from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file, get_exe_dir
+from .. import __version__
 
 
 class MainWindow(QMainWindow):
@@ -60,7 +61,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle('RTT Assistant v1.4')
+        self.setWindowTitle(f'RTT Assistant v{__version__}')
         self.setGeometry(100, 100, 1000, 700)
         
         # 创建中心部件
@@ -892,7 +893,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         
         # 版本信息
-        version = QLabel("<p>版本: v1.4</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
+        version = QLabel(f"<p>版本: v{__version__}</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
         

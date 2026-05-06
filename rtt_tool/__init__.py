@@ -1,3 +1,3 @@
 # RTT调试工具
-# 版本: v1.4
-# 作者: CodeArts Agent
+
+__version__ = "1.4.1"

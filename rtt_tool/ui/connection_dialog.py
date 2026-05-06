@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from ..utils.resource_utils import get_external_file, get_exe_dir
+from ..utils.device_info_service import DeviceInfoService
 
 
 class ConnectionDialog(QDialog):
@@ -30,6 +31,7 @@ class ConnectionDialog(QDialog):
         self.rtt_range_start = rtt_range_start
         self.rtt_range_size = rtt_range_size
         self.log_service = log_service
+        self._device_info_service = DeviceInfoService(log_service=log_service)
         
         self.init_ui()
     
@@ -235,34 +237,8 @@ class ConnectionDialog(QDialog):
     
     def _load_device_list(self):
         """从配置文件加载设备列表"""
-        import os
-        
-        default_devices = [
-            "Cortex-M0", "Cortex-M0+", "Cortex-M1", "Cortex-M3", "Cortex-M4", "Cortex-M7",
-            "STM32F103", "STM32F407", "STM32H743",
-            "NRF52832", "NRF52840",
-            "R9A07G084M04",
-        ]
-        
-        ext_file = get_external_file("devices.txt")
-        config_paths = [ext_file] if ext_file else []
-        
-        for config_path in config_paths:
-            if os.path.exists(config_path):
-                try:
-                    devices = []
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith('#'):
-                                devices.append(line)
-                    
-                    if devices:
-                        return devices
-                except:
-                    pass
-        
-        return default_devices
+        device_names, _ = self._device_info_service.load_device_list()
+        return device_names
     
     def _on_browse_device(self):
         """浏览设备 - 打开筛选对话框"""
@@ -305,10 +281,8 @@ class ConnectionDialog(QDialog):
     
     def _on_update_devices(self):
         """从J-Link DLL更新设备列表到devices.txt"""
-        from PyQt5.QtWidgets import QMessageBox, QProgressDialog
+        from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
         from PyQt5.QtCore import Qt
-        import pylink
-        from pylink import library
         import os
         
         dll_path = get_external_file("JLink_x64.dll")
@@ -321,68 +295,51 @@ class ConnectionDialog(QDialog):
             QMessageBox.warning(self, "错误", err_msg)
             return
         
-        try:
-            jlink_lib = library.Library(dllpath=dll_path)
-            jlink = pylink.JLink(lib=jlink_lib)
-            jlink.open()
-            
-            try:
-                num_devices = jlink.num_supported_devices()
-                
-                if self.log_service:
-                    self.log_service.info(f"开始从DLL读取设备列表, 共{num_devices}个设备")
-                
-                progress = QProgressDialog(f"正在从DLL读取{num_devices}个设备...", "取消", 0, num_devices, self)
+        progress = None
+        num_devices = [0]
+        
+        def progress_cb(current, total):
+            nonlocal progress
+            if total > 0 and progress is None:
+                num_devices[0] = total
+                progress = QProgressDialog(f"正在从DLL读取{total}个设备...", "取消", 0, total, self)
                 progress.setWindowTitle("更新设备列表")
                 progress.setWindowModality(Qt.WindowModal)
                 progress.setMinimumDuration(0)
                 progress.show()
-                
-                devices = []
-                for i in range(num_devices):
-                    if progress.wasCanceled():
-                        break
-                    try:
-                        d = jlink.supported_device(i)
-                        if d and d.name:
-                            devices.append(d.name)
-                    except:
-                        pass
-                    if i % 200 == 0:
-                        progress.setValue(i)
-                        from PyQt5.QtWidgets import QApplication
-                        QApplication.processEvents()
-                
-                progress.setValue(num_devices)
-            finally:
-                jlink.close()
+            if progress is not None:
+                progress.setValue(current)
+                QApplication.processEvents()
+                return progress.wasCanceled()
+            return False
+        
+        try:
+            device_names, _ = self._device_info_service.update_device_list(
+                dll_path, progress_callback=progress_cb
+            )
             
-            if not devices:
+            if progress is not None:
+                progress.setValue(num_devices[0])
+            
+            if not device_names:
                 err_msg = "未能从DLL读取到设备列表"
                 if self.log_service:
                     self.log_service.error(f"更新设备列表失败: {err_msg}")
                 QMessageBox.warning(self, "错误", err_msg)
                 return
             
-            devices.sort()
-            
-            devices_file = os.path.join(get_exe_dir(), "devices.txt")
-            with open(devices_file, 'w', encoding='utf-8') as f:
-                f.write("# RTT Assistant - 支持的设备型号列表\n")
-                f.write(f"# 从J-Link DLL自动生成, 共{len(devices)}个设备\n")
-                f.write("#\n")
-                for d in devices:
-                    f.write(f"{d}\n")
-            
             self.device_combo.clear()
-            self.device_combo.addItems(devices)
+            self.device_combo.addItems(device_names)
             self.device_combo.setCurrentText(self.last_device)
             
+            devices_file = os.path.join(get_exe_dir(), "devices.txt")
             if self.log_service:
-                self.log_service.success(f"设备列表已更新: {len(devices)}个设备, 保存至{devices_file}")
-            QMessageBox.information(self, "完成", f"已更新设备列表: {len(devices)}个设备\n保存至: {devices_file}")
+                self.log_service.success(f"设备列表已更新: {len(device_names)}个设备, 保存至{devices_file}")
+            QMessageBox.information(self, "完成", f"已更新设备列表: {len(device_names)}个设备\n保存至: {devices_file}")
             
         except Exception as e:
+            if progress is not None:
+                progress.setValue(num_devices[0])
             err_msg = f"更新设备列表失败: {e}"
             if self.log_service:
                 self.log_service.error(err_msg)

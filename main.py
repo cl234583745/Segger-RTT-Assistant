@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 RTT Assistant - RTT调试助手
-版本: v1.4
 作者: CodeArts Agent
 """
 
@@ -44,7 +43,8 @@ def main():
     
     # 设置应用名称
     app.setApplicationName("RTT Assistant")
-    app.setApplicationVersion("1.4")
+    from rtt_tool import __version__
+    app.setApplicationVersion(__version__)
     
     # 设置应用图标
     icon_path = get_resource_path("icon.ico")
