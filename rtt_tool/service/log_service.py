@@ -36,6 +36,7 @@ class LogService(QObject):
     log_added = pyqtSignal(str, str, str)  # 日志添加信号 (时间, 类型, 消息)
     
     # 日志类型
+    DEBUG = 'DEBUG'
     INFO = 'INFO'
     WARNING = 'WARNING'
     ERROR = 'ERROR'
@@ -94,6 +95,10 @@ class LogService(QObject):
         
         # 发射信号
         self.log_added.emit(timestamp, log_type, message)
+    
+    def debug(self, message):
+        """添加DEBUG日志"""
+        self.add_log(message, self.DEBUG)
     
     def info(self, message):
         """添加INFO日志"""

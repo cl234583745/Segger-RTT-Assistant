@@ -54,6 +54,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.log_window = None  # 日志窗口
         self.log_service = None  # 日志服务(由controller设置)
+        self.device_info_service = None  # 设备信息服务(由controller设置)
         self.last_config = {}  # 上次的连接配置
         
         # 收发数据日志文件
@@ -407,10 +408,17 @@ class MainWindow(QMainWindow):
     
     def _on_quick_connect_clicked(self):
         """快速连接按钮点击 - 使用上次配置直接连接"""
+        from datetime import datetime
+        if self.log_service:
+            self.log_service.debug(f"[性能] 点击连接按钮: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         self.quick_connect_requested.emit()
     
     def _on_config_clicked(self):
         """配置按钮点击 - 打开配置对话框"""
+        from datetime import datetime
+        if self.log_service:
+            self.log_service.debug(f"[性能] 点击配置按钮: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        
         # 显示连接对话框,传入上次的配置
         dialog = ConnectionDialog(
             self, 
@@ -419,8 +427,13 @@ class MainWindow(QMainWindow):
             self.last_config.get('rtt_mode', 'auto'),
             self.last_config.get('rtt_range_start', ''),
             self.last_config.get('rtt_range_size', ''),
-            self.log_service
+            self.last_config.get('map_file_path', ''),
+            self.log_service,
+            self.device_info_service
         )
+        
+        if self.log_service:
+            self.log_service.debug(f"[性能] 创建对话框完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         
         if dialog.exec_() == ConnectionDialog.Accepted:
             # 获取配置

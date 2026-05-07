@@ -24,7 +24,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QRadioButton, QCheckBox, QLineEdit,
-    QPushButton, QComboBox, QLabel, QFileDialog, QDialogButtonBox
+    QPushButton, QComboBox, QLabel, QFileDialog, QDialogButtonBox, QMessageBox
 )
 from PyQt5.QtCore import Qt
 from ..utils.resource_utils import get_external_file, get_exe_dir
@@ -35,7 +35,8 @@ class ConnectionDialog(QDialog):
     """连接配置对话框"""
     
     def __init__(self, parent=None, last_rtt_address="", last_device="Cortex-M4", 
-                 rtt_mode="auto", rtt_range_start="", rtt_range_size="", log_service=None):
+                 rtt_mode="auto", rtt_range_start="", rtt_range_size="", map_file_path="", 
+                 log_service=None, device_info_service=None):
         super().__init__(parent)
         self.setWindowTitle("连接配置")
         self.setModal(True)
@@ -46,20 +47,31 @@ class ConnectionDialog(QDialog):
         self.rtt_mode = rtt_mode
         self.rtt_range_start = rtt_range_start
         self.rtt_range_size = rtt_range_size
+        self.map_file_path = map_file_path
         self.log_service = log_service
-        self._device_info_service = DeviceInfoService(log_service=log_service)
+        self._device_info_service = device_info_service if device_info_service else DeviceInfoService(log_service=log_service)
         
         self.init_ui()
     
     def init_ui(self):
         """初始化UI"""
+        from datetime import datetime
+        if self.log_service:
+            self.log_service.debug(f"[性能] 开始初始化UI: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        
         layout = QVBoxLayout(self)
         
         connection_group = self._create_connection_group()
         layout.addWidget(connection_group)
         
+        if self.log_service:
+            self.log_service.debug(f"[性能] 连接组创建完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        
         device_group = self._create_device_group()
         layout.addWidget(device_group)
+        
+        if self.log_service:
+            self.log_service.debug(f"[性能] 设备组创建完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         
         interface_group = self._create_interface_group()
         layout.addWidget(interface_group)
@@ -69,6 +81,9 @@ class ConnectionDialog(QDialog):
         
         button_layout = self._create_buttons()
         layout.addLayout(button_layout)
+        
+        if self.log_service:
+            self.log_service.debug(f"[性能] UI初始化完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
     
     def _create_connection_group(self):
         """创建连接方式选择组"""
@@ -193,6 +208,32 @@ class ConnectionDialog(QDialog):
         address_layout.addStretch()
         layout.addLayout(address_layout)
         
+        # Map文件搜索组
+        map_group = QGroupBox("Map文件搜索")
+        map_group_layout = QHBoxLayout(map_group)
+        
+        self.open_map_btn = QPushButton("打开map文件")
+        self.open_map_btn.setFixedHeight(24)
+        self.open_map_btn.setEnabled(False)
+        self.open_map_btn.clicked.connect(self._on_open_map_file)
+        map_group_layout.addWidget(self.open_map_btn)
+        
+        self.map_path_edit = QLineEdit()
+        self.map_path_edit.setPlaceholderText("map文件路径")
+        self.map_path_edit.setReadOnly(True)
+        self.map_path_edit.setFixedWidth(250)
+        if self.map_file_path:
+            self.map_path_edit.setText(self.map_file_path)
+        map_group_layout.addWidget(self.map_path_edit)
+        
+        self.search_map_btn = QPushButton("搜索_SEGGER_RTT")
+        self.search_map_btn.setFixedHeight(24)
+        self.search_map_btn.setEnabled(False)
+        self.search_map_btn.clicked.connect(self._on_search_map_file)
+        map_group_layout.addWidget(self.search_map_btn)
+        
+        layout.addWidget(map_group)
+        
         range_layout = QHBoxLayout()
         self.range_radio = QRadioButton("搜索范围:")
         range_layout.addWidget(self.range_radio)
@@ -213,8 +254,8 @@ class ConnectionDialog(QDialog):
             self.range_size_edit.setText(self.rtt_range_size)
         range_layout.addWidget(self.range_size_edit)
         
-        self.auto_fill_btn = QPushButton("自动")
-        self.auto_fill_btn.setFixedSize(50, 24)
+        self.auto_fill_btn = QPushButton("获取自动检测地址")
+        self.auto_fill_btn.setFixedHeight(24)
         self.auto_fill_btn.setEnabled(False)
         self.auto_fill_btn.clicked.connect(self._on_auto_fill_range)
         range_layout.addWidget(self.auto_fill_btn)
@@ -373,6 +414,8 @@ class ConnectionDialog(QDialog):
         self.range_start_edit.setEnabled(self.range_radio.isChecked())
         self.range_size_edit.setEnabled(self.range_radio.isChecked())
         self.auto_fill_btn.setEnabled(self.range_radio.isChecked())
+        self.open_map_btn.setEnabled(self.address_radio.isChecked())
+        self.search_map_btn.setEnabled(self.address_radio.isChecked() and bool(self.map_file_path))
     
     def _on_auto_fill_range(self):
         """自动填充搜索范围"""
@@ -417,6 +460,39 @@ class ConnectionDialog(QDialog):
                 self.log_service.error(f"自动填充失败: 格式转换错误 - {e}")
             QMessageBox.warning(self, "错误", f"填充失败: {e}")
     
+    def _on_open_map_file(self):
+        """打开map文件选择对话框"""
+        from PyQt5.QtWidgets import QFileDialog
+        from ..utils.map_file_parser import MapFileParser
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择Map文件", self.map_file_path, "Map Files (*.map);;All Files (*)"
+        )
+        
+        if file_path:
+            self.map_file_path = file_path
+            self.map_path_edit.setText(file_path)
+            self.search_map_btn.setEnabled(True)
+            if self.log_service:
+                self.log_service.info(f"已选择map文件: {file_path}")
+    
+    def _on_search_map_file(self):
+        """从map文件搜索_SEGGER_RTT地址"""
+        from ..utils.map_file_parser import MapFileParser
+        
+        if not self.map_file_path:
+            QMessageBox.warning(self, "提示", "请先选择map文件")
+            return
+        
+        addr, error = MapFileParser.search_symbol(self.map_file_path, self.log_service)
+        
+        if addr:
+            self.address_edit.setText(addr)
+            if self.log_service:
+                self.log_service.success(f"已填充地址: {addr}")
+        else:
+            QMessageBox.warning(self, "搜索失败", error or "未找到_SEGGER_RTT符号")
+    
     def get_config(self):
         """获取配置信息"""
         speed_str = self.speed_combo.currentText()
@@ -435,6 +511,7 @@ class ConnectionDialog(QDialog):
             "rtt_address": self.address_edit.text() if self.address_radio.isChecked() else None,
             "rtt_range_start": self.range_start_edit.text() if self.range_radio.isChecked() else None,
             "rtt_range_size": self.range_size_edit.text() if self.range_radio.isChecked() else None,
+            "map_file_path": self.map_file_path,
         }
         
         return config

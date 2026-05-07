@@ -48,6 +48,7 @@ class ConfigService:
         "rtt_mode": "auto",  # RTT控制块模式: auto/address/range
         "rtt_range_start": "",  # RTT搜索范围起始地址
         "rtt_range_size": "",  # RTT搜索范围大小
+        "map_file_path": "",  # map文件路径(用于搜索RTT地址)
         "ansi_color_enabled": False,  # ANSI转义码染色开关
         "keyword_highlight_enabled": True,  # 关键字高亮开关
         "keyword_rules": {  # 关键字高亮规则

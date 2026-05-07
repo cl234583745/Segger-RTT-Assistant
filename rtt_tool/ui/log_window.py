@@ -62,7 +62,7 @@ class LogWindow(QWidget):
         # 日志类型过滤
         toolbar_layout.addWidget(QLabel('日志类型:'))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(['全部', 'INFO', 'WARNING', 'ERROR', 'SUCCESS'])
+        self.type_combo.addItems(['全部', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'SUCCESS'])
         self.type_combo.currentTextChanged.connect(self.on_filter_changed)
         toolbar_layout.addWidget(self.type_combo)
         
@@ -211,6 +211,7 @@ class LogWindow(QWidget):
             str: 颜色代码
         """
         colors = {
+            'DEBUG': '#888888',    # 灰色
             'INFO': '#00ff00',      # 绿色
             'WARNING': '#ffff00',   # 黄色
             'ERROR': '#ff0000',     # 红色

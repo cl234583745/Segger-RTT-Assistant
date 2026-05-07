@@ -49,6 +49,11 @@ class MainController(QObject):
         self.log_service = LogService()
         self.window.log_service = self.log_service
         
+        # 创建设备信息服务（全局复用，避免重复解析devices.txt）
+        from ..utils.device_info_service import DeviceInfoService
+        self.device_info_service = DeviceInfoService(log_service=self.log_service)
+        self.window.device_info_service = self.device_info_service
+        
         # 创建服务
         self.connection_service = ConnectionService(self.log_service)
         self.receive_service = DataReceiveService()
@@ -101,16 +106,49 @@ class MainController(QObject):
     
     def _on_connect_requested(self, config):
         """连接请求"""
+        from datetime import datetime
+        if self.log_service:
+            self.log_service.debug(f"[性能] 开始连接请求: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        
         self.window.set_status("正在连接...")
         
+        # 如果是手动地址模式且配置了map文件，自动更新地址
+        updated_address = None
+        if config.get('rtt_mode') == 'address' and config.get('map_file_path'):
+            from ..utils.map_file_parser import MapFileParser
+            if self.log_service:
+                self.log_service.debug(f"[性能] 开始搜索map文件: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+            addr, error = MapFileParser.search_symbol(config['map_file_path'], self.log_service)
+            if self.log_service:
+                self.log_service.debug(f"[性能] map文件搜索完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+            if addr:
+                config['rtt_address'] = addr
+                updated_address = addr
+                if self.log_service:
+                    self.log_service.success(f"已从map文件更新RTT地址: {addr}")
+            elif self.log_service:
+                self.log_service.warning(f"从map文件更新地址失败，使用原地址: {error}")
+        
         # 连接
+        if self.log_service:
+            self.log_service.debug(f"[性能] 开始调用connection_service.connect: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         success = self.connection_service.connect(config)
+        if self.log_service:
+            self.log_service.debug(f"[性能] connection_service.connect返回: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         
         if success:
             # 启动数据接收
             jlink = self.connection_service.get_jlink()
             self.receive_service.start_receive(jlink)
             self.send_service.set_jlink(jlink)
+            
+            # 如果地址被更新，保存到配置中
+            if updated_address:
+                self.window.last_config['rtt_address'] = updated_address
+                self.config_service.set('rtt_address', updated_address)
+                self.config_service.save()
+                if self.log_service:
+                    self.log_service.info(f"已保存更新后的RTT地址到配置: {updated_address}")
     
     def _on_quick_connect_requested(self):
         """快速连接请求 - 使用上次配置"""
@@ -131,6 +169,7 @@ class MainController(QObject):
             'rtt_address': last_config.get('rtt_address', ''),
             'rtt_range_start': last_config.get('rtt_range_start', ''),
             'rtt_range_size': last_config.get('rtt_range_size', ''),
+            'map_file_path': last_config.get('map_file_path', ''),
         }
         
         # 使用配置连接
@@ -249,6 +288,7 @@ class MainController(QObject):
             'rtt_address': self.config_service.get('rtt_address', ''),
             'rtt_range_start': self.config_service.get('rtt_range_start', ''),
             'rtt_range_size': self.config_service.get('rtt_range_size', ''),
+            'map_file_path': self.config_service.get('map_file_path', ''),
         }
         self.window.set_last_config(last_config)
         
@@ -287,6 +327,10 @@ class MainController(QObject):
         
         if 'rtt_range_size' in config:
             self.config_service.set('rtt_range_size', config['rtt_range_size'])
+        
+        # 保存map文件路径
+        if 'map_file_path' in config:
+            self.config_service.set('map_file_path', config['map_file_path'])
         
         # 保存到文件
         self.config_service.save()
