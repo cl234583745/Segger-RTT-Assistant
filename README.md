@@ -130,7 +130,9 @@ pyinstaller RTT-Assistant.spec
 
 ## 许可证
 
-MIT License
+GNU General Public License v3.0 (GPL v3)
+
+本项目使用PyQt5 (GPL v3)作为GUI框架，根据GPL v3条款，本项目以GPL v3发布。
 
 ## 作者
 
