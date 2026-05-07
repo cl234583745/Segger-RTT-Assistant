@@ -872,13 +872,9 @@ class MainWindow(QMainWindow):
             from pylink import library
             jlink_lib = library.Library(dllpath=dll_path)
             j = pylink.JLink(lib=jlink_lib)
-            j.open()
             
-            try:
-                dll_ver = j.version
-                num_devices = j.num_supported_devices()
-            finally:
-                j.close()
+            dll_ver = j.version
+            num_devices = j.num_supported_devices()
             
             return (f"<p style='font-size:10px;'>"
                     f"<b>J-Link DLL:</b> {dll_ver} | "
