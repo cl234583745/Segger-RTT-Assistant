@@ -213,6 +213,12 @@ class ConnectionDialog(QDialog):
             self.range_size_edit.setText(self.rtt_range_size)
         range_layout.addWidget(self.range_size_edit)
         
+        self.auto_fill_btn = QPushButton("自动")
+        self.auto_fill_btn.setFixedSize(50, 24)
+        self.auto_fill_btn.setEnabled(False)
+        self.auto_fill_btn.clicked.connect(self._on_auto_fill_range)
+        range_layout.addWidget(self.auto_fill_btn)
+        
         range_layout.addStretch()
         layout.addLayout(range_layout)
         
@@ -366,6 +372,50 @@ class ConnectionDialog(QDialog):
         self.address_edit.setEnabled(self.address_radio.isChecked())
         self.range_start_edit.setEnabled(self.range_radio.isChecked())
         self.range_size_edit.setEnabled(self.range_radio.isChecked())
+        self.auto_fill_btn.setEnabled(self.range_radio.isChecked())
+    
+    def _on_auto_fill_range(self):
+        """自动填充搜索范围"""
+        device_name = self.device_combo.currentText().strip()
+        if not device_name:
+            if self.log_service:
+                self.log_service.warning("自动填充失败: 未选择设备")
+            QMessageBox.warning(self, "提示", "请先选择设备型号")
+            return
+        
+        device_info = self._device_info_service.get_device_info(device_name)
+        if device_info is None:
+            if self.log_service:
+                self.log_service.warning(f"自动填充失败: 设备 '{device_name}' 信息不存在")
+            QMessageBox.warning(self, "提示", f"设备 '{device_name}' 的信息不存在")
+            return
+        
+        ram_addr = device_info.extra_attrs.get("RAMAddr", "")
+        ram_size = device_info.ram_size
+        
+        if not ram_addr or ram_addr == "0":
+            if self.log_service:
+                self.log_service.warning(f"自动填充失败: 设备 '{device_name}' 无有效RAMAddr")
+            QMessageBox.warning(self, "提示", f"设备 '{device_name}' 无有效的RAM地址信息")
+            return
+        
+        if ram_size <= 0:
+            if self.log_service:
+                self.log_service.warning(f"自动填充失败: 设备 '{device_name}' 无有效ram_size")
+            QMessageBox.warning(self, "提示", f"设备 '{device_name}' 无有效的RAM大小信息")
+            return
+        
+        try:
+            addr_value = int(ram_addr, 16) if isinstance(ram_addr, str) else int(ram_addr)
+            self.range_start_edit.setText(f"0x{addr_value:08X}")
+            self.range_size_edit.setText(f"0x{ram_size:X}")
+            
+            if self.log_service:
+                self.log_service.success(f"自动填充成功: RAMAddr=0x{addr_value:08X}, ram_size=0x{ram_size:X}")
+        except Exception as e:
+            if self.log_service:
+                self.log_service.error(f"自动填充失败: 格式转换错误 - {e}")
+            QMessageBox.warning(self, "错误", f"填充失败: {e}")
     
     def get_config(self):
         """获取配置信息"""
