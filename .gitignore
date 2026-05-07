@@ -19,7 +19,7 @@ rtt_data.txt
 
 # Temp files
 frames/
-video/
+video*/
 *.tmp
 *TEMP_MPY*
 ScreenShot*.png
