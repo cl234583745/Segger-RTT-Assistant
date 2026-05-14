@@ -26,23 +26,23 @@ from PyQt5.QtCore import QObject, pyqtSignal, QThread
 
 class SendWorker(QThread):
     """发送工作线程"""
-    finished = pyqtSignal(int)  # 完成信号(发送字节数)
-    error = pyqtSignal(str)  # 错误信号
+    finished = pyqtSignal(int)
+    error = pyqtSignal(str)
     
-    def __init__(self, jlink, data):
+    def __init__(self, backend, data, channel=0):
         super().__init__()
-        self.jlink = jlink
+        self._backend = backend
         self.data = data
+        self._channel = channel
     
     def run(self):
         """执行发送"""
         try:
-            if self.jlink is None:
+            if self._backend is None:
                 self.error.emit("未连接到MCU")
                 return
             
-            # 发送数据
-            num_bytes = self.jlink.write_rtt(self.data)
+            num_bytes = self._backend.rtt_write(self._channel, self.data)
             self.finished.emit(num_bytes)
             
         except Exception as e:
@@ -52,40 +52,43 @@ class SendWorker(QThread):
 class DataSendService(QObject):
     """数据发送服务"""
     
-    # 信号定义
-    data_sent = pyqtSignal(int)  # 数据发送信号（发送字节数）
-    error_occurred = pyqtSignal(str)  # 错误信号
+    data_sent = pyqtSignal(int)
+    error_occurred = pyqtSignal(str)
     
     def __init__(self):
         super().__init__()
-        self.jlink = None
+        self._backend = None
+        self._send_channel = 0
         self.worker = None
     
+    def set_backend(self, backend):
+        """设置调试器后端"""
+        self._backend = backend
+    
     def set_jlink(self, jlink):
-        """
-        设置JLink RTT封装对象
-        
-        Args:
-            jlink: JLink RTT封装对象
-        """
-        self.jlink = jlink
+        """向后兼容：设置JLink RTT封装对象"""
+        self._backend = jlink
+    
+    def set_channel(self, channel):
+        """设置发送通道"""
+        self._send_channel = channel
     
     def send_data(self, data):
         """
         发送数据
-        
+
         Args:
             data: 要发送的数据（bytes）
-        
+
         Returns:
             int: 请求发送的字节数（实际发送结果通过data_sent信号返回）
         """
-        if self.jlink is None:
+        if self._backend is None:
             self.error_occurred.emit("未连接到MCU")
             return 0
         
         try:
-            self.worker = SendWorker(self.jlink, data)
+            self.worker = SendWorker(self._backend, data, channel=self._send_channel)
             self.worker.finished.connect(self._on_send_finished)
             self.worker.error.connect(self._on_send_error)
             self.worker.start()

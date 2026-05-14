@@ -141,17 +141,23 @@ class LogService(QObject):
         """
         return [log for log in self.logs if log['type'] == log_type]
     
-    def read_log_file(self):
+    def read_log_file(self, max_lines=500):
         """
-        读取日志文件内容
-        
+        读取日志文件内容（仅最后max_lines行，避免首次加载慢）
+
+        Args:
+            max_lines: 最大读取行数
+
         Returns:
             str: 日志文件内容
         """
         try:
             if os.path.exists(self.log_file_path):
                 with open(self.log_file_path, 'r', encoding='utf-8') as f:
-                    return f.read()
+                    lines = f.readlines()
+                    if len(lines) > max_lines:
+                        lines = lines[-max_lines:]
+                    return ''.join(lines)
         except Exception as e:
             return f"读取日志文件失败: {e}"
         return ""

@@ -23,6 +23,7 @@
 
 import sys
 import os
+import glob as _glob
 from typing import Optional
 import logging
 
@@ -110,6 +111,49 @@ def get_external_file(filename: str) -> Optional[str]:
     
     logger.warning(f"外部文件未找到: {filename} (搜索目录: {search_dirs})")
     return None
+
+
+def sync_pyocd_yaml() -> tuple:
+    """
+    同步 pyocd.yaml 与 packs 目录内容。
+    
+    扫描 exe 同级（或项目根目录）的 packs/ 目录，
+    根据实际 .pack 文件重新生成 pyocd.yaml。
+    
+    Returns:
+        tuple: (updated: bool, pack_count: int, yaml_path: str)
+    """
+    exe_dir = get_exe_dir()
+    packs_dir = os.path.join(exe_dir, 'packs')
+    yaml_path = os.path.join(exe_dir, 'pyocd.yaml')
+
+    pack_files = sorted(_glob.glob(os.path.join(packs_dir, '*.pack'))) if os.path.isdir(packs_dir) else []
+
+    lines = ['pack:']
+    for pf in pack_files:
+        pack_name = os.path.basename(pf)
+        lines.append(f'  - ./packs/{pack_name}')
+    new_content = '\n'.join(lines) + '\n'
+
+    old_content = ''
+    if os.path.exists(yaml_path):
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                old_content = f.read()
+        except Exception:
+            pass
+
+    if new_content != old_content:
+        try:
+            with open(yaml_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            logger.info(f"pyocd.yaml 已同步: {len(pack_files)} 个Pack")
+            return (True, len(pack_files), yaml_path)
+        except Exception as e:
+            logger.warning(f"pyocd.yaml 同步失败: {e}")
+            return (False, len(pack_files), yaml_path)
+
+    return (False, len(pack_files), yaml_path)
 
 
 def get_resource_path(relative_path: str) -> Optional[str]:

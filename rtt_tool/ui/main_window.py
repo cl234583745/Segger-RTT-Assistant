@@ -25,12 +25,14 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QPushButton, QComboBox,
     QCheckBox, QLabel, QStatusBar, QToolBar, QAction,
-    QSplitter, QGroupBox, QFileDialog, QMenu, QMessageBox
+    QSplitter, QGroupBox, QFileDialog, QMenu, QMessageBox,
+    QStackedWidget
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QTextCursor
 from .connection_dialog import ConnectionDialog
 from .log_window import LogWindow
+from .waveform_widget import WaveformWidget
 from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file, get_exe_dir
 from .. import __version__
 
@@ -49,6 +51,7 @@ class MainWindow(QMainWindow):
     hex_display_toggled = pyqtSignal(bool)  # HEX显示开关信号
     config_changed = pyqtSignal(dict)  # 配置改变信号
     reset_counters_requested = pyqtSignal()  # 重置计数器信号
+    mode_changed = pyqtSignal(str)  # 模式切换信号 ("log"/"oscilloscope"/"mixed")
     
     def __init__(self):
         super().__init__()
@@ -63,10 +66,12 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.data_log_file = os.path.join(get_exe_dir(), f"rtt_data_{timestamp}.log")
         self.data_log_handle = None
+
+        self._max_display_lines = 1000
         
         # 打开数据日志文件
         try:
-            self.data_log_handle = open(self.data_log_file, 'w', encoding='utf-8')
+            self.data_log_handle = open(self.data_log_file, 'a', encoding='utf-8')
             self.data_log_handle.write(f"RTT Assistant 收发数据日志\n")
             self.data_log_handle.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             self.data_log_handle.write(f"{'='*60}\n\n")
@@ -109,14 +114,46 @@ class MainWindow(QMainWindow):
         """)
         
         # 创建接收区
-        receive_group = self._create_receive_area()
-        splitter.addWidget(receive_group)
+        self._receive_group = self._create_receive_area()
+        
+        # 创建波形显示组件
+        self.waveform_widget = WaveformWidget()
+        
+        # 使用 QStackedWidget 管理三种显示模式
+        self._display_stack = QStackedWidget()
+        
+        # 日志模式页面
+        self._log_page = QWidget()
+        log_layout = QVBoxLayout(self._log_page)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.addWidget(self._receive_group)
+        self._display_stack.addWidget(self._log_page)
+        
+        # 示波器模式页面
+        self._oscilloscope_page = QWidget()
+        osc_layout = QVBoxLayout(self._oscilloscope_page)
+        osc_layout.setContentsMargins(0, 0, 0, 0)
+        osc_layout.addWidget(self.waveform_widget)
+        self._display_stack.addWidget(self._oscilloscope_page)
+        
+        # 混合模式页面（接收区和波形上下分割）
+        self._mixed_page = QWidget()
+        mixed_layout = QVBoxLayout(self._mixed_page)
+        mixed_layout.setContentsMargins(0, 0, 0, 0)
+        self._mixed_splitter = QSplitter(Qt.Vertical)
+        mixed_layout.addWidget(self._mixed_splitter)
+        self._display_stack.addWidget(self._mixed_page)
+        
+        # 初始显示日志模式，混合模式页面延迟填充
+        self._current_mode = 'log'
+        
+        splitter.addWidget(self._display_stack)
         
         # 创建发送区
         send_group = self._create_send_area()
         splitter.addWidget(send_group)
         
-        # 设置初始比例(接收区:发送区 = 3:1)
+        # 设置初始比例(显示区:发送区 = 3:1)
         splitter.setSizes([500, 200])
         
         main_layout.addWidget(splitter)
@@ -158,6 +195,19 @@ class MainWindow(QMainWindow):
         clear_action.setToolTip("清空接收区")
         clear_action.triggered.connect(self._on_clear_clicked)
         toolbar.addAction(clear_action)
+        
+        toolbar.addSeparator()
+        
+        # 显示模式切换
+        self._mode_menu = QMenu(self)
+        self._mode_menu.addAction("日志")
+        self._mode_menu.addAction("示波器")
+        self._mode_menu.addAction("混合")
+        self._mode_menu.triggered.connect(self._on_mode_menu_clicked)
+
+        self._mode_button = QPushButton("模式")
+        self._mode_button.setMenu(self._mode_menu)
+        toolbar.addWidget(self._mode_button)
         
         toolbar.addSeparator()
         
@@ -394,10 +444,10 @@ class MainWindow(QMainWindow):
         # 添加弹性空间
         self.status_bar.addWidget(QLabel(""), 1)
         
-        # J-Link硬件/固件信息(连接时显示)
-        self.jlink_info_label = QLabel("")
-        self.jlink_info_label.setStyleSheet("color: #666666;")
-        self.status_bar.addPermanentWidget(self.jlink_info_label)
+        # 探针信息(连接时显示)
+        self.probe_info_label = QLabel("")
+        self.probe_info_label.setStyleSheet("color: #666666;")
+        self.status_bar.addPermanentWidget(self.probe_info_label)
         
         # 重置按钮
         self.reset_btn = QPushButton("重置")
@@ -421,15 +471,21 @@ class MainWindow(QMainWindow):
         
         # 显示连接对话框,传入上次的配置
         dialog = ConnectionDialog(
-            self, 
-            self.last_config.get('rtt_address', ''),
-            self.last_config.get('device', 'Cortex-M4'),
-            self.last_config.get('rtt_mode', 'auto'),
-            self.last_config.get('rtt_range_start', ''),
-            self.last_config.get('rtt_range_size', ''),
-            self.last_config.get('map_file_path', ''),
-            self.log_service,
-            self.device_info_service
+            self,
+            last_rtt_address=self.last_config.get('rtt_address', ''),
+            last_device=self.last_config.get('device', 'Cortex-M4'),
+            rtt_mode=self.last_config.get('rtt_mode', 'auto'),
+            rtt_range_start=self.last_config.get('rtt_range_start', ''),
+            rtt_range_size=self.last_config.get('rtt_range_size', ''),
+            map_file_path=self.last_config.get('map_file_path', ''),
+            log_service=self.log_service,
+            device_info_service=self.device_info_service,
+            debugger_manager=getattr(self, '_debugger_manager', None),
+            connect_mode=self.last_config.get('connect_mode', 'under_reset'),
+            pyocd_target=self.last_config.get('pyocd_target', ''),
+            probe_name=self.last_config.get('probe_name', ''),
+            probe_backend=self.last_config.get('probe_backend', ''),
+            probe_serial=self.last_config.get('probe_serial', '')
         )
         
         if self.log_service:
@@ -446,6 +502,55 @@ class MainWindow(QMainWindow):
         """断开按钮点击"""
         self.disconnect_requested.emit()
     
+    def _on_mode_menu_clicked(self, action):
+        """模式菜单点击"""
+        text_to_mode = {"日志": "log", "示波器": "oscilloscope", "混合": "mixed"}
+        new_mode = text_to_mode.get(action.text())
+        if new_mode is None:
+            return
+        self._mode_button.setText(action.text())
+        self._apply_mode(new_mode)
+
+    def _on_mode_changed(self, index):
+        """显示模式切换（保留兼容，实际由 _on_mode_menu_clicked 代替）"""
+        modes = ['log', 'oscilloscope', 'mixed']
+        if not (0 <= index < len(modes)):
+            return
+        new_mode = modes[index]
+        self._mode_button.setText(["日志", "示波器", "混合"][index])
+        self._apply_mode(new_mode)
+
+    def _apply_mode(self, new_mode):
+        index = ['log', 'oscilloscope', 'mixed'].index(new_mode)
+        
+        if new_mode == 'mixed' and self._current_mode != 'mixed':
+            # 切换到混合模式：将接收区和波形移入mixed_splitter
+            self._receive_group.setParent(None)
+            self.waveform_widget.setParent(None)
+            self._mixed_splitter.addWidget(self._receive_group)
+            self._mixed_splitter.addWidget(self.waveform_widget)
+            self._mixed_splitter.setSizes([300, 300])
+        elif new_mode == 'log' and self._current_mode == 'mixed':
+            # 从混合模式切回日志模式：将接收区移回log_page
+            self._receive_group.setParent(None)
+            self.waveform_widget.setParent(None)
+            log_layout = self._log_page.layout()
+            log_layout.addWidget(self._receive_group)
+            osc_layout = self._oscilloscope_page.layout()
+            osc_layout.addWidget(self.waveform_widget)
+        elif new_mode == 'oscilloscope' and self._current_mode == 'mixed':
+            # 从混合模式切到示波器模式
+            self._receive_group.setParent(None)
+            self.waveform_widget.setParent(None)
+            log_layout = self._log_page.layout()
+            log_layout.addWidget(self._receive_group)
+            osc_layout = self._oscilloscope_page.layout()
+            osc_layout.addWidget(self.waveform_widget)
+        
+        self._display_stack.setCurrentIndex(index)
+        self._current_mode = new_mode
+        self.mode_changed.emit(new_mode)
+
     def _on_clear_clicked(self):
         """清空按钮点击"""
         self.receive_text.clear()
@@ -728,6 +833,16 @@ class MainWindow(QMainWindow):
             self.receive_text.insertPlainText(text)
             self.receive_text.moveCursor(QTextCursor.End)
         
+        # 限制显示行数，超过则删除最旧的行
+        doc = self.receive_text.document()
+        if doc.blockCount() > self._max_display_lines:
+            cursor = QTextCursor(doc)
+            cursor.movePosition(QTextCursor.Start)
+            lines_to_remove = doc.blockCount() - self._max_display_lines
+            for _ in range(lines_to_remove):
+                cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+        
         # 保存到数据日志文件(去除ANSI码)
         if self.data_log_handle:
             try:
@@ -752,7 +867,7 @@ class MainWindow(QMainWindow):
         
         if connected:
             self.status_label.setText("已连接")
-            self._update_jlink_hardware_info()
+            self._update_probe_info()
         else:
             self.status_label.setText("未连接")
     
@@ -857,19 +972,38 @@ class MainWindow(QMainWindow):
         # 打开文件夹
         os.startfile(folder)
     
-    def _update_jlink_hardware_info(self):
-        """从已连接的JLink读取硬件/固件信息并显示到状态栏"""
+    def _update_probe_info(self):
+        """更新状态栏探针信息（支持J-Link和PyOCD）"""
         try:
-            if not hasattr(self, '_jlink_ref') or self._jlink_ref is None:
-                self.jlink_info_label.setText("")
-                return
-            j = self._jlink_ref
-            hw_ver = j.hardware_version
-            fw_ver = j.firmware_version
-            sn = j.serial_number
-            self.jlink_info_label.setText(f"SN:{sn} | HW:{hw_ver} | FW:{fw_ver}")
+            backend_type = self.last_config.get('probe_backend', 'jlink') if hasattr(self, 'last_config') else 'jlink'
         except Exception:
-            self.jlink_info_label.setText("")
+            backend_type = 'jlink'
+
+        if backend_type == 'jlink':
+            try:
+                if not hasattr(self, '_jlink_ref') or self._jlink_ref is None:
+                    self.probe_info_label.setText("")
+                    return
+                j = self._jlink_ref
+                hw_ver = j.hardware_version
+                fw_ver = j.firmware_version
+                sn = j.serial_number
+                self.probe_info_label.setText(f"J-Link SN:{sn} | HW:{hw_ver} | FW:{fw_ver}")
+            except Exception:
+                self.probe_info_label.setText("")
+        else:
+            try:
+                probe_name = self.last_config.get('probe_name', '') if hasattr(self, 'last_config') else ''
+                probe_serial = self.last_config.get('probe_serial', '') if hasattr(self, 'last_config') else ''
+                target = self.last_config.get('pyocd_target', '') if hasattr(self, 'last_config') else ''
+                info = f"{probe_name}" if probe_name else backend_type.upper()
+                if probe_serial:
+                    info += f" SN:{probe_serial}"
+                if target:
+                    info += f" | Target:{target}"
+                self.probe_info_label.setText(info)
+            except Exception:
+                self.probe_info_label.setText(backend_type.upper())
     
     def _get_jlink_dll_info(self):
         """读取J-Link DLL版本信息(仅软件信息，无需探针)"""
@@ -896,6 +1030,36 @@ class MainWindow(QMainWindow):
         except Exception as e:
             return f"<p style='font-size:10px; color:#cc0000;'>J-Link DLL读取失败: {e}</p>"
     
+    def _get_pyocd_info(self):
+        """读取PyOCD版本、目标数和Pack数"""
+        import os
+        try:
+            import pyocd
+            pyocd_ver = pyocd.__version__
+        except ImportError:
+            return "<p style='font-size:10px;'>PyOCD: 未安装</p>"
+        except Exception:
+            pyocd_ver = '?'
+        target_count = 0
+        pack_count = 0
+        try:
+            from ..utils.resource_utils import get_exe_dir
+            exe_dir = get_exe_dir()
+            targets_file = os.path.join(exe_dir, 'pyocd_targets.txt')
+            if os.path.exists(targets_file):
+                with open(targets_file, 'r', encoding='utf-8') as f:
+                    target_count = len([l for l in f if l.strip()])
+            packs_dir = os.path.join(exe_dir, 'packs')
+            if os.path.isdir(packs_dir):
+                pack_count = len([f for f in os.listdir(packs_dir) if f.endswith('.pack')])
+        except Exception:
+            pass
+        return (f"<p style='font-size:10px;'>"
+                f"<b>PyOCD:</b> v{pyocd_ver} | "
+                f"<b>支持目标:</b> {target_count}个 | "
+                f"<b>Pack文件:</b> {pack_count}个"
+                f"</p>")
+    
     def _on_about(self):
         """显示关于对话框"""
         from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton
@@ -904,6 +1068,8 @@ class MainWindow(QMainWindow):
         
         # 读取J-Link DLL版本信息
         jlink_info = self._get_jlink_dll_info()
+        # 读取PyOCD信息
+        pyocd_info = self._get_pyocd_info()
         
         # 创建自定义对话框
         dialog = QDialog(self)
@@ -928,6 +1094,13 @@ class MainWindow(QMainWindow):
             jlink_label.setAlignment(Qt.AlignCenter)
             jlink_label.setStyleSheet("color: #666666;")
             layout.addWidget(jlink_label)
+        
+        # PyOCD信息
+        if pyocd_info:
+            pyocd_label = QLabel(pyocd_info)
+            pyocd_label.setAlignment(Qt.AlignCenter)
+            pyocd_label.setStyleSheet("color: #666666;")
+            layout.addWidget(pyocd_label)
         
         # 分隔线
         layout.addWidget(QLabel("<hr>"))

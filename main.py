@@ -55,6 +55,33 @@ def main():
     # 设置全局异常处理
     sys.excepthook = exception_hook
     
+    # 配置 libusb: 在源码模式下手动设置(rth_libusb.py在打包时自动生效)
+    try:
+        import usb1
+        dll_path = os.path.join(os.path.dirname(usb1.__file__), 'libusb-1.0.dll')
+        if os.path.isfile(dll_path):
+            import ctypes
+            ctypes.CDLL(dll_path)
+            try:
+                os.add_dll_directory(os.path.dirname(dll_path))
+            except Exception:
+                pass
+            import usb.backend.libusb1 as _libusb1_backend
+            _orig_get_backend = _libusb1_backend.get_backend
+            def _patched_get_backend(find_library=None, **kwargs):
+                return _orig_get_backend(find_library=lambda x: dll_path)
+            _libusb1_backend.get_backend = _patched_get_backend
+    except Exception:
+        pass
+    
+    # 设置工作目录为exe所在目录，确保pyocd.yaml/packs等相对路径正确
+    try:
+        from rtt_tool.utils.resource_utils import get_exe_dir
+        exe_dir = get_exe_dir()
+        os.chdir(exe_dir)
+    except Exception:
+        pass
+    
     app = QApplication(sys.argv)
     
     # 设置应用名称

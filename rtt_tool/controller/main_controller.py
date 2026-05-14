@@ -21,13 +21,36 @@
 协调UI和业务服务
 """
 
-from PyQt5.QtCore import QObject, QDateTime
+from PyQt5.QtCore import QObject, QDateTime, QThread, QTimer, pyqtSignal
 from ..ui.main_window import MainWindow
 from ..service.connection_service import ConnectionService
 from ..service.data_receive_service import DataReceiveService
 from ..service.data_send_service import DataSendService
 from ..service.log_service import LogService
 from ..utils.config_service import ConfigService
+from ..backend.manager import DebuggerManager
+from ..processors.log_processor import LogProcessor
+from ..processors.waveform_processor import WaveformProcessor
+import sys
+
+
+class _ConnectWorker(QThread):
+    """连接工作线程"""
+    finished = pyqtSignal(bool)
+    error = pyqtSignal(str)
+
+    def __init__(self, connection_service, config, parent=None):
+        super().__init__(parent)
+        self._connection_service = connection_service
+        self._config = config
+
+    def run(self):
+        try:
+            success = self._connection_service.connect(self._config)
+            self.finished.emit(success)
+        except Exception as e:
+            self.error.emit(str(e))
+            self.finished.emit(False)
 
 
 class MainController(QObject):
@@ -54,16 +77,29 @@ class MainController(QObject):
         self.device_info_service = DeviceInfoService(log_service=self.log_service)
         self.window.device_info_service = self.device_info_service
         
-        # 创建服务
-        self.connection_service = ConnectionService(self.log_service)
+        # 创建调试器管理器和服务
+        self.debugger_manager = DebuggerManager(log_service=self.log_service)
+        self.window._debugger_manager = self.debugger_manager
+        self.connection_service = ConnectionService(self.debugger_manager, self.log_service)
         self.receive_service = DataReceiveService()
         self.send_service = DataSendService()
+        
+        # 创建数据处理器
+        self.log_processor = LogProcessor(log_service=self.log_service)
+        self.waveform_processor = WaveformProcessor(buffer_size=1024, channels=[1])
         
         # 状态标志
         self.show_timestamp = False
         self.hex_display = False
         self.rx_bytes = 0  # 接收字节数
         self.tx_bytes = 0  # 发送字节数
+        
+        # 连接超时控制
+        self._connect_worker = None
+        self._connect_timer = None
+        self._connect_timeout = 3
+        self._updated_rtt_address = None
+        self._pending_connect_config = None
         
         # 连接信号
         self._connect_signals()
@@ -103,6 +139,16 @@ class MainController(QObject):
         # 发送服务信号 -> 控制器
         self.send_service.data_sent.connect(self._on_data_sent)
         self.send_service.error_occurred.connect(self._on_error)
+        
+        # 数据处理器信号 -> UI
+        self.log_processor.text_updated.connect(self._on_log_text_updated)
+        self.waveform_processor.waveform_updated.connect(self._on_waveform_updated)
+        
+        # 接收服务信号 -> 处理器分发
+        self.receive_service.data_received.connect(self._on_data_received_dispatch)
+        
+        # 模式切换信号
+        self.window.mode_changed.connect(self._on_mode_changed)
     
     def _on_connect_requested(self, config):
         """连接请求"""
@@ -111,44 +157,139 @@ class MainController(QObject):
             self.log_service.debug(f"[性能] 开始连接请求: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         
         self.window.set_status("正在连接...")
+        self._updated_rtt_address = None
         
-        # 如果是手动地址模式且配置了map文件，自动更新地址
-        updated_address = None
-        if config.get('rtt_mode') == 'address' and config.get('map_file_path'):
-            from ..utils.map_file_parser import MapFileParser
+        # MAP文件前置校验
+        is_valid, rtt_address, error_msg = self._validate_map_file(config)
+        if not is_valid:
+            self.window.set_status(f"连接失败: {error_msg}")
             if self.log_service:
-                self.log_service.debug(f"[性能] 开始搜索map文件: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-            addr, error = MapFileParser.search_symbol(config['map_file_path'], self.log_service)
+                self.log_service.error(error_msg)
+            return
+        if rtt_address:
+            config['rtt_address'] = rtt_address
+            self._updated_rtt_address = rtt_address
             if self.log_service:
-                self.log_service.debug(f"[性能] map文件搜索完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-            if addr:
-                config['rtt_address'] = addr
-                updated_address = addr
-                if self.log_service:
-                    self.log_service.success(f"已从map文件更新RTT地址: {addr}")
-            elif self.log_service:
-                self.log_service.warning(f"从map文件更新地址失败，使用原地址: {error}")
+                self.log_service.success(f"已从map文件更新RTT地址: {rtt_address}")
         
-        # 连接
-        if self.log_service:
-            self.log_service.debug(f"[性能] 开始调用connection_service.connect: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
-        success = self.connection_service.connect(config)
-        if self.log_service:
-            self.log_service.debug(f"[性能] connection_service.connect返回: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+        # 启动带超时的异步连接
+        self._start_connect_with_timeout(config)
+
+    def _validate_map_file(self, config):
+        """MAP文件前置校验"""
+        rtt_mode = config.get('rtt_mode', 'auto')
+        map_file_path = config.get('map_file_path', '')
         
+        if rtt_mode != 'address' or not map_file_path:
+            return True, None, None
+        
+        from ..utils.map_file_parser import MapFileParser
+        addr, error = MapFileParser.search_symbol(map_file_path, self.log_service)
+        
+        if error:
+            if "文件不存在" in error:
+                return False, None, f"MAP文件不存在: {map_file_path}"
+            elif "不是有效文件" in error:
+                return False, None, f"MAP文件无效: {map_file_path} 不是有效文件"
+            elif "未找到符号" in error:
+                return False, None, "MAP文件中未找到SEGGER_RTT符号"
+            elif "无法识别文件编码" in error:
+                return False, None, "MAP文件编码无法识别"
+            else:
+                return False, None, f"MAP文件解析失败: {error}"
+        
+        return True, addr, None
+
+    def _start_connect_with_timeout(self, config, timeout=10):
+        """启动带超时的异步连接"""
+        self._connect_timeout = timeout
+        self._pending_connect_config = config
+
+        # 创建工作线程
+        self._connect_worker = _ConnectWorker(self.connection_service, config, self)
+        self._connect_worker.finished.connect(self._on_connect_worker_finished)
+        self._connect_worker.error.connect(self._on_connect_worker_error)
+
+        # 创建超时定时器
+        self._connect_timer = QTimer()
+        self._connect_timer.setSingleShot(True)
+        self._connect_timer.timeout.connect(self._on_connect_timeout)
+        self._connect_timer.start(timeout * 1000)
+
+        if self.log_service:
+            from datetime import datetime
+            self.log_service.debug(
+                f"[性能] 启动异步连接(超时{timeout}s): {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+
+        self._connect_worker.start()
+
+    def _on_connect_worker_finished(self, success):
+        """连接Worker完成回调"""
+        if self._connect_timer:
+            self._connect_timer.stop()
+            self._connect_timer = None
+
         if success:
-            # 启动数据接收
-            jlink = self.connection_service.get_jlink()
-            self.receive_service.start_receive(jlink)
-            self.send_service.set_jlink(jlink)
-            
-            # 如果地址被更新，保存到配置中
-            if updated_address:
-                self.window.last_config['rtt_address'] = updated_address
-                self.config_service.set('rtt_address', updated_address)
-                self.config_service.save()
-                if self.log_service:
-                    self.log_service.info(f"已保存更新后的RTT地址到配置: {updated_address}")
+            backend = self.connection_service.get_backend()
+            if backend:
+                # 启动数据接收
+                self.receive_service.start_receive(backend)
+                self.send_service.set_backend(backend)
+
+                # 更新UI状态
+                self.window.set_connected(True)
+                self.window.set_status("已连接")
+
+                # 保存更新的RTT地址
+                if self._updated_rtt_address:
+                    self.window.last_config['rtt_address'] = self._updated_rtt_address
+                    self.config_service.set('rtt_address', self._updated_rtt_address)
+                    self.config_service.save()
+                    if self.log_service:
+                        self.log_service.info(f"已保存更新后的RTT地址到配置: {self._updated_rtt_address}")
+            else:
+                self.window.set_connected(False)
+                self.window.set_status("连接失败")
+        else:
+            self.window.set_connected(False)
+            self.window.set_status("连接失败")
+
+        self._connect_worker = None
+        self._pending_connect_config = None
+
+    def _on_connect_worker_error(self, error_msg):
+        """连接Worker错误回调"""
+        if self.log_service:
+            self.log_service.error(f"连接错误: {error_msg}")
+        self.window.set_status(f"连接失败: {error_msg}")
+
+    def _on_connect_timeout(self):
+        """连接超时回调"""
+        timeout = self._connect_timeout
+
+        # 停止工作线程
+        if self._connect_worker and self._connect_worker.isRunning():
+            if hasattr(self._connect_worker, '_stop'):
+                self._connect_worker._stop = True
+            self._connect_worker.wait(3000)
+            if self._connect_worker.isRunning():
+                self._connect_worker.terminate()
+                self._connect_worker.wait(1000)
+
+        # 断开连接
+        try:
+            self.connection_service.disconnect()
+        except Exception:
+            pass
+
+        self.window.set_connected(False)
+        self.window.set_status(f"连接超时({timeout}s)")
+        if self.log_service:
+            self.log_service.error(f"连接超时: {timeout}秒内未完成连接")
+
+        self._connect_worker = None
+        self._connect_timer = None
+        self._pending_connect_config = None
     
     def _on_quick_connect_requested(self):
         """快速连接请求 - 使用上次配置"""
@@ -162,9 +303,13 @@ class MainController(QObject):
         
         # 构建完整的配置
         config = {
+            'debugger_type': last_config.get('debugger_type', 'jlink'),
+            'serial_number': last_config.get('serial_number'),
             'device': last_config.get('device', 'Cortex-M4'),
             'interface': last_config.get('interface', 'SWD'),
             'speed': last_config.get('speed', 4000),
+            'connect_mode': last_config.get('connect_mode', 'under_reset'),
+            'pyocd_target': last_config.get('pyocd_target', ''),
             'rtt_mode': last_config.get('rtt_mode', 'auto'),
             'rtt_address': last_config.get('rtt_address', ''),
             'rtt_range_start': last_config.get('rtt_range_start', ''),
@@ -195,6 +340,10 @@ class MainController(QObject):
         jlink_wrapper = self.connection_service.get_jlink()
         if jlink_wrapper and jlink_wrapper.jlink:
             self.window._jlink_ref = jlink_wrapper.jlink
+        else:
+            backend = self.connection_service.get_backend()
+            if backend is not None:
+                self.window._jlink_ref = None
         self.window.set_connected(True)
         self.window.set_status("已连接")
     
@@ -226,40 +375,43 @@ class MainController(QObject):
         # 记录日志
         self.log_service.add_log(f"发送完成: {num_bytes} 字节", 'SUCCESS')
     
-    def _on_data_received(self, data):
-        """数据接收"""
-        # 更新接收字节数
+    def _on_data_received_dispatch(self, channel, data):
+        """数据接收分发到处理器"""
         self.rx_bytes += len(data)
         self.window.update_rx_bytes(self.rx_bytes)
         
-        # 格式化数据
-        if self.hex_display:
-            # HEX格式显示
-            text = ' '.join(f'{b:02X}' for b in data)
-        else:
-            # 字符串格式显示
-            text = data.decode('utf-8', errors='replace')
-        
-        # 添加时间戳 - 在每行前添加
-        if self.show_timestamp:
-            timestamp = QDateTime.currentDateTime().toString("[yyyy-MM-dd hh:mm:ss.zzz] ")
-            # 如果数据包含换行符,在每行前添加时间戳
-            if '\n' in text:
-                lines = text.split('\n')
-                text = '\n'.join(timestamp + line if line else line for line in lines)
-            else:
-                text = timestamp + text
-        
-        # 追加到接收区(会自动保存到数据日志文件)
+        if channel in self.log_processor.get_supported_channels():
+            self.log_processor.process(channel, data)
+        if channel in self.waveform_processor.get_supported_channels():
+            self.waveform_processor.process(channel, data)
+    
+    def _on_log_text_updated(self, channel, text):
+        """日志文本更新"""
         self.window.append_receive_data(text)
+    
+    def _on_waveform_updated(self, channel, values):
+        """波形数据更新"""
+        timestamps, all_values = self.waveform_processor.get_buffer_data(channel)
+        self.window.waveform_widget.update_data(channel, timestamps, all_values)
+    
+    def _on_mode_changed(self, mode):
+        """显示模式切换"""
+        if self.log_service:
+            self.log_service.info(f'显示模式切换: {mode}')
+    
+    def _on_data_received(self, channel, data):
+        """数据接收（已废弃，由 _on_data_received_dispatch + LogProcessor 处理）"""
+        pass
     
     def _on_timestamp_toggled(self, enabled):
         """时间戳开关"""
         self.show_timestamp = enabled
+        self.log_processor.set_timestamp_enabled(enabled)
     
     def _on_hex_display_toggled(self, enabled):
         """HEX显示开关"""
         self.hex_display = enabled
+        self.log_processor.set_hex_mode(enabled)
     
     def _on_error(self, error_msg):
         """错误处理"""
@@ -283,12 +435,19 @@ class MainController(QObject):
         """加载配置"""
         # 加载连接配置
         last_config = {
+            'debugger_type': self.config_service.get('debugger_type', 'jlink'),
+            'serial_number': self.config_service.get('last_serial_number', None),
             'device': self.config_service.get('last_device', 'Cortex-M4'),
+            'connect_mode': self.config_service.get('connect_mode', 'under_reset'),
+            'pyocd_target': self.config_service.get('pyocd_target', ''),
             'rtt_mode': self.config_service.get('rtt_mode', 'auto'),
             'rtt_address': self.config_service.get('rtt_address', ''),
             'rtt_range_start': self.config_service.get('rtt_range_start', ''),
             'rtt_range_size': self.config_service.get('rtt_range_size', ''),
             'map_file_path': self.config_service.get('map_file_path', ''),
+            'probe_name': self.config_service.get('probe_name', ''),
+            'probe_backend': self.config_service.get('probe_backend', ''),
+            'probe_serial': self.config_service.get('probe_serial', ''),
         }
         self.window.set_last_config(last_config)
         
@@ -309,10 +468,26 @@ class MainController(QObject):
     
     def _on_config_changed(self, config):
         """配置改变"""
+        # 保存调试器类型
+        if 'debugger_type' in config:
+            self.config_service.set('debugger_type', config['debugger_type'])
+        
+        # 保存序列号
+        if 'serial_number' in config:
+            self.config_service.set('last_serial_number', config['serial_number'])
+        
         # 保存设备型号
         if 'device' in config:
             self.config_service.set('last_device', config['device'])
-        
+
+        # 保存连接模式
+        if 'connect_mode' in config:
+            self.config_service.set('connect_mode', config['connect_mode'])
+
+        # 保存PyOCD目标
+        if 'pyocd_target' in config:
+            self.config_service.set('pyocd_target', config['pyocd_target'])
+
         # 保存RTT模式
         if 'rtt_mode' in config:
             self.config_service.set('rtt_mode', config['rtt_mode'])
@@ -331,6 +506,14 @@ class MainController(QObject):
         # 保存map文件路径
         if 'map_file_path' in config:
             self.config_service.set('map_file_path', config['map_file_path'])
+
+        # 保存探针信息
+        if 'probe_name' in config:
+            self.config_service.set('probe_name', config['probe_name'])
+        if 'probe_backend' in config:
+            self.config_service.set('probe_backend', config['probe_backend'])
+        if 'probe_serial' in config:
+            self.config_service.set('probe_serial', config['probe_serial'])
         
         # 保存到文件
         self.config_service.save()

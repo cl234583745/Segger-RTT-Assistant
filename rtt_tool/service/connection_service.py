@@ -22,20 +22,21 @@
 """
 
 from PyQt5.QtCore import QObject, pyqtSignal
-from ..infrastructure.jlink_rtt_wrapper import JLinkRTTWrapper
+from ..backend.base import DebuggerBackend
 from ..utils.device_info_service import DeviceInfoService
 
 
 class ConnectionService(QObject):
-    """连接管理服务"""
+    """连接管理服务，支持多后端调试器。"""
     
     connected = pyqtSignal()
     disconnected = pyqtSignal()
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, log_service=None):
+    def __init__(self, debugger_manager, log_service=None):
         super().__init__()
-        self.jlink = None
+        self._debugger_manager = debugger_manager
+        self._backend = None
         self.is_connected = False
         self.log_service = log_service
         self._device_info_service = DeviceInfoService(log_service=log_service)
@@ -43,27 +44,23 @@ class ConnectionService(QObject):
     def connect(self, config):
         """
         连接到MCU
-        
+
         Args:
             config: 连接配置字典
-        
+
         Returns:
             bool: 连接是否成功
         """
         try:
+            debugger_type = config.get('debugger_type', 'jlink')
             if self.log_service:
-                self.log_service.info(f'开始连接MCU: {config.get("device", "Cortex-M4")}')
-            
-            if self.jlink is None:
-                if self.log_service:
-                    self.log_service.info('初始化JLink RTT封装')
-                self.jlink = JLinkRTTWrapper(config.get('jlink_path'), log_service=self.log_service)
-                if self.log_service:
-                    self.log_service.info(f'JLink DLL路径: {self.jlink.jlink_path}')
-            
+                self.log_service.info(f'开始连接MCU: {config.get("device", "Cortex-M4")} (后端: {debugger_type})')
+
+            self._backend = self._debugger_manager.select_backend(debugger_type)
+
             if self.log_service:
                 self.log_service.info(f'连接参数: 接口={config.get("interface", "SWD")}, 速度={config.get("speed", 4000)}kHz')
-            
+
             device_name = config.get('device', 'Cortex-M4')
             try:
                 device_info = self._device_info_service.get_device_info(device_name)
@@ -72,27 +69,32 @@ class ConnectionService(QObject):
                     self.log_service.info(log_msg)
             except Exception:
                 pass
-            
-            self.jlink.connect(
+
+            self._backend.connect(
                 device=device_name,
                 interface=config.get('interface', 'SWD'),
                 speed=config.get('speed', 4000),
                 serial_number=config.get('serial_number'),
                 ip_address=config.get('ip_address'),
+                connect_mode=config.get('connect_mode', 'under_reset'),
+                pyocd_target=config.get('pyocd_target'),
             )
-            
+
             rtt_mode = config.get('rtt_mode', 'auto')
             rtt_address = None
             range_start = None
             range_end = None
-            
+
+            rtt_cli_flags = ''
+
             if rtt_mode == 'address':
                 rtt_address_str = config.get('rtt_address', '')
                 if rtt_address_str:
                     rtt_address = int(rtt_address_str, 16)
+                    rtt_cli_flags = f'-a {rtt_address_str}'
                     if self.log_service:
                         self.log_service.info(f'使用指定RTT地址: 0x{rtt_address:X}')
-                        
+
             elif rtt_mode == 'range':
                 range_start_str = config.get('rtt_range_start', '')
                 range_size_str = config.get('rtt_range_size', '')
@@ -102,53 +104,87 @@ class ConnectionService(QObject):
                     if range_size <= 0:
                         raise ValueError(f"搜索大小无效: 大小(0x{range_size:X}) 必须>0")
                     range_end = range_start + range_size
+                    rtt_cli_flags = f'-a {range_start_str} -s {range_size_str}'
                     if self.log_service:
                         self.log_service.info(f'RTT搜索范围: 起始=0x{range_start:X}, 大小=0x{range_size:X}, 结束=0x{range_end:X}')
                 else:
                     raise ValueError("搜索范围模式需要指定起始地址和大小")
-            
+
+            elif rtt_mode == 'auto':
+                rtt_cli_flags = ''  # 自动搜索，无需额外参数
+
+            # 在日志中打印等效的命令行字符串，方便排查问题
+            if self.log_service and self._backend is not None:
+                target_str = config.get('pyocd_target', '')
+                speed_val = config.get('speed', 4000)
+                mode = config.get('connect_mode', 'under_reset')
+                bt = self._backend.backend_type
+                if bt == 'pyocd':
+                    cli = f'pyocd rtt --target {target_str} -f {speed_val}k --connect={mode}'
+                    if rtt_cli_flags:
+                        cli += f' {rtt_cli_flags}'
+                elif bt == 'jlink':
+                    cli = f'pyocd rtt --target {target_str} -f {speed_val}k --connect={mode}'
+                    if rtt_cli_flags:
+                        cli += f' {rtt_cli_flags}'
+                    cli += '  # J-Link也可用: JLinkRTTLogger / JLinkRTTClient'
+                else:
+                    cli = f'pyocd rtt --target {target_str}'
+                self.log_service.info(f'等效命令行: {cli}')
+
             if self.log_service:
                 self.log_service.info('初始化RTT...')
-            
-            self.jlink.init_rtt(
+
+            self._backend.init_rtt(
                 rtt_address=rtt_address,
                 rtt_mode=rtt_mode,
                 range_start=range_start,
                 range_end=range_end,
             )
-            
+
             self.is_connected = True
             self.connected.emit()
-            
+
             if self.log_service:
                 self.log_service.success('MCU连接成功!')
-            
+
             return True
-            
+
         except Exception as e:
             self.is_connected = False
+            if self._backend is not None:
+                try:
+                    self._backend.disconnect()
+                except Exception:
+                    pass
             error_msg = str(e)
             self.error_occurred.emit(error_msg)
-            
+
             if self.log_service:
                 self.log_service.error(f'连接失败: {error_msg}')
-            
+
             return False
     
     def disconnect(self):
         """断开连接"""
         if self.log_service:
             self.log_service.info('断开MCU连接')
-        
-        if self.jlink is not None:
-            self.jlink.disconnect()
-            self.jlink = None
-        
+
+        if self._backend is not None:
+            self._backend.disconnect()
+
         self.is_connected = False
         self.disconnected.emit()
-        
+
         if self.log_service:
             self.log_service.success('已断开连接')
-    
+
+    def get_backend(self) -> DebuggerBackend:
+        """获取当前调试器后端。"""
+        return self._backend
+
     def get_jlink(self):
-        return self.jlink
+        """向后兼容：获取 JLinkRTTWrapper 引用。仅 J-Link 后端可用。"""
+        if self._backend is not None and self._backend.backend_type == 'jlink':
+            return self._backend.get_wrapper()
+        return None

@@ -13,7 +13,7 @@
     "window_width": 1000,
     "window_height": 700,
     "rtt_address": null,
-    "last_device": "R7FA6M5BH",
+    "last_device": "R7KA8P1KF_CPU0",
     "rtt_mode": "auto",
     "rtt_range_start": null,
     "rtt_range_end": "0x1000",
@@ -29,5 +29,26 @@
         "SUCCESS": "#00ff00",
         "INFO": "#0055ff"
     },
-    "keyword_highlight_enabled": true
+    "keyword_highlight_enabled": true,
+    "map_file_path": "G:/e2s_workspace/ra8p1_rtt/Debug/ra8p1_rtt.map",
+    "debugger_type": "pyocd",
+    "poll_interval": 10,
+    "display_mode": "log",
+    "time_base": 100,
+    "trigger_mode": "auto",
+    "trigger_channel": 0,
+    "trigger_edge": "rising",
+    "vertical_scale": "auto",
+    "color_theme": "dark",
+    "waveform_channels": [
+        1
+    ],
+    "monitor_interval": 100,
+    "monitored_variables": [],
+    "last_serial_number": "5383132D37325",
+    "connect_mode": "under_reset",
+    "pyocd_target": "r7ka8p1kf",
+    "probe_name": "RA4M2 CMSIS-DAP Probe",
+    "probe_backend": "pyocd",
+    "probe_serial": "5383132D37325"
 }

@@ -28,20 +28,24 @@ from ..infrastructure.ring_buffer import RingBuffer
 class DataReceiveThread(QThread):
     """数据接收线程"""
     
-    data_received = pyqtSignal(bytes)
+    data_received = pyqtSignal(int, bytes)
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, jlink, buffer_size=8192):
+    def __init__(self, backend, channels=None, buffer_size=8192, poll_interval_ms=1):
         """
         初始化数据接收线程
-        
+
         Args:
-            jlink: JLink RTT封装对象
+            backend: DebuggerBackend 实例
+            channels: 轮询通道列表，默认 [0]
             buffer_size: 环形缓冲区大小
+            poll_interval_ms: 轮询间隔(ms)
         """
         super().__init__()
-        self.jlink = jlink
+        self._backend = backend
+        self._channels = channels if channels is not None else [0]
         self.buffer = RingBuffer(buffer_size)
+        self._poll_interval_ms = poll_interval_ms
         self.running = False
     
     def run(self):
@@ -50,18 +54,16 @@ class DataReceiveThread(QThread):
         
         while self.running:
             try:
-                # 从RTT读取数据
-                data = self.jlink.read_rtt(1024)
+                for channel in self._channels:
+                    try:
+                        data = self._backend.rtt_read(channel, 1024)
+                        if data:
+                            self.buffer.write(data)
+                            self.data_received.emit(channel, data)
+                    except Exception as e:
+                        self.error_occurred.emit(f"通道{channel}读取错误: {e}")
                 
-                if data:
-                    # 写入环形缓冲区
-                    self.buffer.write(data)
-                    
-                    # 发射数据接收信号
-                    self.data_received.emit(data)
-                
-                # 短暂休眠，避免CPU占用过高
-                self.msleep(1)
+                self.msleep(self._poll_interval_ms)
                 
             except Exception as e:
                 self.error_occurred.emit(str(e))
@@ -73,13 +75,21 @@ class DataReceiveThread(QThread):
         self.running = False
         self.wait()
     
+    def set_poll_interval(self, ms):
+        """设置轮询间隔"""
+        self._poll_interval_ms = max(1, min(ms, 100))
+    
+    def set_channels(self, channels):
+        """动态设置轮询通道"""
+        self._channels = channels if channels is not None else [0]
+    
     def get_buffer_data(self, size=None):
         """
         从缓冲区获取数据
-        
+
         Args:
             size: 要获取的字节数，None表示获取所有
-        
+
         Returns:
             bytes: 缓冲区数据
         """
@@ -89,25 +99,25 @@ class DataReceiveThread(QThread):
 class DataReceiveService(QObject):
     """数据接收服务"""
     
-    # 信号定义
-    data_received = pyqtSignal(bytes)  # 数据接收信号
-    error_occurred = pyqtSignal(str)  # 错误信号
+    data_received = pyqtSignal(int, bytes)
+    error_occurred = pyqtSignal(str)
     
     def __init__(self):
         super().__init__()
         self.receive_thread = None
     
-    def start_receive(self, jlink):
+    def start_receive(self, backend, channels=None):
         """
         启动数据接收
-        
+
         Args:
-            jlink: JLink RTT封装对象
+            backend: DebuggerBackend 实例
+            channels: 轮询通道列表
         """
         if self.receive_thread is not None and self.receive_thread.isRunning():
             return
         
-        self.receive_thread = DataReceiveThread(jlink)
+        self.receive_thread = DataReceiveThread(backend, channels=channels)
         self.receive_thread.data_received.connect(self.data_received)
         self.receive_thread.error_occurred.connect(self.error_occurred)
         self.receive_thread.start()
@@ -121,7 +131,7 @@ class DataReceiveService(QObject):
     def is_receiving(self):
         """
         是否正在接收
-        
+
         Returns:
             bool: 是否正在接收
         """

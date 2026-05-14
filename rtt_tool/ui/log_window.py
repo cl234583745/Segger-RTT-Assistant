@@ -28,6 +28,9 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QTextCursor, QColor
+import re
+
+_LOG_LINE_RE = re.compile(r'\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[(\w+)\] (.+)')
 
 
 class LogWindow(QWidget):
@@ -152,8 +155,7 @@ class LogWindow(QWidget):
             
             # 解析日志行
             # 格式: [HH:MM:SS.mmm] [TYPE] message
-            import re
-            match = re.match(r'\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[(\w+)\] (.+)', line)
+            match = _LOG_LINE_RE.match(line)
             
             if match:
                 timestamp, log_type, message = match.groups()

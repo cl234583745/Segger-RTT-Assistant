@@ -59,6 +59,18 @@ class ConfigService:
             "OK": "#00ff00",
             "SUCCESS": "#00ff00",
         },
+        "debugger_type": "jlink",
+        "poll_interval": 10,
+        "display_mode": "log",
+        "time_base": 100,
+        "trigger_mode": "auto",
+        "trigger_channel": 0,
+        "trigger_edge": "rising",
+        "vertical_scale": "auto",
+        "color_theme": "dark",
+        "waveform_channels": [1],
+        "monitor_interval": 100,
+        "monitored_variables": [],
     }
     
     def __init__(self, config_file=None):
