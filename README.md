@@ -1,7 +1,7 @@
 # RTT调试工具
 
 一个功能丰富的RTT调试工具，用于通过JLink RTT或PyOCD（DAP-Link/ST-Link）与MCU进行通信。
-
+    ![](./images/main.png)
 ## 功能特性
 
 - ✅ 通过SWD/JTAG接口连接MCU
@@ -61,7 +61,7 @@ python main.py
 ```
 
 ### 连接MCU
-
+![](./images/config.png)
 1. 点击工具栏的"连接"按钮
 2. 在配置对话框中按步骤操作：
    - **步骤1**：选择调试器（J-Link或DAP-Link/ST-Link）
