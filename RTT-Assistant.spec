@@ -1,53 +1,69 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, 'src/python')
 from rtt_tool import __version__
-import glob
 import os
-import shutil
-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-pyocd_datas = collect_data_files('pyocd')
-pyocd_hidden = collect_submodules('pyocd')
-
-libusb_dll = None
-try:
-    import usb1
-    dll_candidate = os.path.join(os.path.dirname(usb1.__file__), 'libusb-1.0.dll')
-    if os.path.isfile(dll_candidate):
-        libusb_dll = dll_candidate
-except ImportError:
-    pass
-
-extra_hidden = [
-    'pylink', 'pefile', 'psutil',
-    'pyocd', 'usb1', 'usb', 'usb.core', 'usb.backend', 'usb.backend.libusb1',
-    'intelhex', 'pyelftools', 'pyelftools.elf.elffile', 'pyelftools.elf.sections',
-    'yaml', 'hid', 'hidapi', 'intervaltree',
-    'rtt_tool.backend', 'rtt_tool.backend.base', 'rtt_tool.backend.jlink_backend',
-    'rtt_tool.backend.pyocd_backend', 'rtt_tool.backend.manager',
-    'rtt_tool.processors', 'rtt_tool.processors.base', 'rtt_tool.processors.log_processor',
-    'rtt_tool.processors.waveform_processor', 'rtt_tool.processors.variable_monitor',
-    'rtt_tool.plugins', 'rtt_tool.plugins.plugin_base', 'rtt_tool.plugins.plugin_manager',
-    'rtt_tool.utils.data_export_service', 'rtt_tool.utils.data_replay_service',
-]
-
-extra_binaries = []
-if libusb_dll:
-    extra_binaries.append((libusb_dll, 'usb1'))
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
-    binaries=extra_binaries,
-    datas=[
-        ('icon.ico', '.'),
-    ] + pyocd_datas,
-    hiddenimports=extra_hidden + pyocd_hidden,
+    ['src/scripts/main.py'],
+    pathex=['src/python'],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'rtt_tool.backend', 'rtt_tool.backend.base', 'rtt_tool.backend.jlink_backend',
+        'rtt_tool.backend.pyocd_backend', 'rtt_tool.backend.manager',
+        'rtt_tool.processors', 'rtt_tool.processors.base', 'rtt_tool.processors.log_processor',
+        'rtt_tool.processors.waveform_processor', 'rtt_tool.processors.variable_monitor',
+        'rtt_tool.plugins', 'rtt_tool.plugins.plugin_base', 'rtt_tool.plugins.plugin_manager',
+        'rtt_tool.utils.data_export_service', 'rtt_tool.utils.data_replay_service',
+        'rtt_tool.runtime', 'rtt_tool.runtime.path_config',
+        'rtt_tool.runtime.dependency_manifest', 'rtt_tool.runtime.dependency_checker',
+        'rtt_tool.runtime.runtime_guard', 'rtt_tool.runtime.setup_wizard',
+        'rtt_tool.runtime.pyocd_target_index',
+        'xml', 'xml.etree', 'xml.etree.ElementTree',
+        'xml.parsers', 'xml.parsers.expat',
+        'html', 'html.parser',
+        'pdb', 'cmd', 'bdb', 'linecache', 'code', 'codeop',
+        'pydoc', 'pydoc_data', 'pydoc_data.topics',
+        'socket', 'ssl', 'http', 'http.client', 'http.server',
+        'urllib', 'urllib.parse', 'urllib.request', 'urllib.error',
+        'email', 'email.mime', 'email.mime.text', 'email.parser',
+        'csv', 'queue', 'concurrent', 'concurrent.futures',
+        'typing', 'dataclasses', 'importlib', 'importlib.util',
+        'importlib.abc', 'importlib.machinery',
+        'struct', 'binascii', 'tempfile', 'shutil', 'glob',
+        'logging', 'logging.config', 'logging.handlers',
+        'hashlib', 'hmac', 'secrets', 'base64',
+        'json', 'json.decoder', 'json.encoder',
+        'zipfile', 'tarfile', 'gzip', 'bz2', 'lzma',
+        'sqlite3', 'sqlite3.dbapi2',
+        'xmlrpc', 'xmlrpc.client', 'xmlrpc.server',
+        'multiprocessing', 'multiprocessing.queues',
+        'threading', 'subprocess', 'signal',
+        'inspect', 'dis', 'tokenize', 'ast', 'compileall',
+        'unittest', 'unittest.mock',
+        'copy', 'copyreg', 'weakref', 'types', 'functools',
+        'itertools', 'operator', 'contextlib', 'abc',
+        'pathlib', 'io', 'mmap', 'select', 'msvcrt',
+        'ctypes', 'ctypes.util', 'ctypes.wintypes',
+        'configparser', 'argparse', 'getopt',
+        're', 'sre_compile', 'sre_parse', 'sre_constants',
+        'decimal', 'fractions', 'numbers', 'math', 'cmath',
+        'random', 'statistics', 'datetime', 'calendar',
+        'zoneinfo', 'gettext', 'locale',
+        'platform', 'sysconfig', 'site',
+        'netrc', 'ftplib', 'smtplib', 'telnetlib',
+        'plistlib', 'tomllib', 'token',
+        'py_compile', 'symbol', 'symtable',
+        'traceback', 'warnings', 'faulthandler',
+        'atexit', 'fnmatch', 'stat',
+        'pprint', 'reprlib', 'textwrap',
+        'difflib', 'heapq', 'bisect',
+    ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['rth_libusb.py'],
+    runtime_hooks=['src/scripts/runtime_hook_usb.py'],
     excludes=[
         'numba', 'llvmlite', 'scipy', 'pandas', 'matplotlib',
         'PIL', 'Pillow', 'tkinter', 'tcl', 'tk',
@@ -60,6 +76,8 @@ a = Analysis(
         'pyarrow', 'h5py',
         'sympy', 'networkx',
         'cmsis_pack_manager',
+        'pyqtgraph',
+        'usb', 'usb1', 'pyocd', 'hid', 'hidapi',
     ],
     noarchive=False,
     optimize=0,
@@ -77,7 +95,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=['libusb-1.0.dll', 'JLink_x64.dll', 'JLinkARM.dll'],
+    upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
@@ -85,5 +103,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icon.ico',
+    icon='resources/icon.ico',
 )

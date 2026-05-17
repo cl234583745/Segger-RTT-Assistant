@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-RTT Assistant - RTT调试助手 (重构版)
-源码在 src/ 目录，依赖在 runtime/ 目录
+RTT Assistant - RTT调试助手
+作者: chenkaka
 """
 
 import sys
@@ -14,7 +14,7 @@ import os
 
 def _setup_src_path():
     this_dir = os.path.dirname(os.path.abspath(__file__))
-    src_python = os.path.join(this_dir, 'src', 'python')
+    src_python = os.path.join(os.path.dirname(this_dir), 'python')
     if os.path.isdir(src_python):
         abs_src = os.path.abspath(src_python)
         if abs_src not in sys.path:
@@ -40,11 +40,9 @@ def exception_hook(exctype, value, traceback):
 
     try:
         from datetime import datetime
-        from rtt_tool.runtime.path_config import RUNTIME_LOG_DIR
-        import os
+        from rtt_tool.utils.resource_utils import get_exe_dir
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-        os.makedirs(RUNTIME_LOG_DIR, exist_ok=True)
-        log_path = os.path.join(RUNTIME_LOG_DIR, 'rtt_system.log')
+        log_path = os.path.join(get_exe_dir(), 'rtt_system.log')
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] [ERROR] {error_msg}\n")
     except:
@@ -63,13 +61,22 @@ def main():
     sys.excepthook = exception_hook
 
     from rtt_tool.runtime.runtime_guard import RuntimeGuard
-    RuntimeGuard.setup()
+    from rtt_tool.runtime.dependency_checker import DependencyChecker
+
+    deps_ok = RuntimeGuard.setup()
+    if not deps_ok:
+        report = DependencyChecker.check_all(check_runtime_only=True)
+        deps_ok = RuntimeGuard.show_setup_wizard(report)
+        if not deps_ok:
+            print("依赖未就绪，程序退出")
+            sys.exit(1)
 
     from PyQt5.QtWidgets import QApplication
     from PyQt5.QtGui import QIcon
-    from rtt_tool.utils.resource_utils import get_resource_path, get_exe_dir
+    from rtt_tool.utils.resource_utils import get_resource_path
 
     try:
+        from rtt_tool.utils.resource_utils import get_exe_dir
         exe_dir = get_exe_dir()
         os.chdir(exe_dir)
     except Exception:

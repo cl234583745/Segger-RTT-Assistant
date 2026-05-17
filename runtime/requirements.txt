@@ -1,0 +1,10 @@
+pyocd>=0.34.0
+usb1>=1.2.1
+hidapi>=0.14.0
+intelhex>=2.3.0
+pyelftools>=0.29
+cmsis-pack-manager>=1.0.0
+pylink-square>=1.7.0
+psutil>=5.9.0
+PyQt5>=5.15.0
+numpy>=1.24.0

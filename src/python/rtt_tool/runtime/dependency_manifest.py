@@ -1,0 +1,209 @@
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Optional, Dict
+
+
+class DependencyType(Enum):
+    PYTHON_PACKAGE = 'python_package'
+    SYSTEM_PACKAGE = 'system_package'
+    DLL = 'dll'
+    PACK = 'pack'
+    CONFIG = 'config'
+
+
+class BackendType(Enum):
+    JLINK = 'jlink'
+    DAPLINK = 'daplink'
+    STLINK = 'stlink'
+
+
+@dataclass
+class DependencyItem:
+    name: str
+    dep_type: DependencyType
+    description: str = ''
+    required: bool = True
+    version_constraint: str = ''
+    download_url: str = ''
+    local_path: str = ''
+    filename: str = ''
+    backend: Optional[BackendType] = None
+    size_mb: float = 0.0
+
+    @property
+    def display_name(self) -> str:
+        return self.description or self.name
+
+
+SYSTEM_DEPENDENCIES = [
+    DependencyItem(
+        name='PyQt5', dep_type=DependencyType.SYSTEM_PACKAGE,
+        description='PyQt5 GUI框架 (系统级安装)', required=True,
+        download_url='pip:PyQt5>=5.15.0',
+    ),
+    DependencyItem(
+        name='pyqtgraph', dep_type=DependencyType.SYSTEM_PACKAGE,
+        description='实时波形显示库 (系统级安装)', required=True,
+        download_url='pip:pyqtgraph>=0.12.0',
+    ),
+]
+
+JLINK_DEPENDENCIES = [
+    DependencyItem(
+        name='pylink', dep_type=DependencyType.PYTHON_PACKAGE,
+        description='J-Link SDK Python封装 (pylink-square)', backend=BackendType.JLINK,
+        required=True, version_constraint='>=0.5.0',
+        download_url='pip:pylink-square>=0.5.0', size_mb=0.7,
+    ),
+    DependencyItem(
+        name='pefile', dep_type=DependencyType.PYTHON_PACKAGE,
+        description='PE文件解析 (DLL位数检测)', backend=BackendType.JLINK,
+        required=True, download_url='pip:pefile', size_mb=0.3,
+    ),
+    DependencyItem(
+        name='JLink_x64.dll', dep_type=DependencyType.DLL,
+        description='J-Link 驱动DLL (64位, 需从SEGGER官网下载)', backend=BackendType.JLINK,
+        required=False, filename='JLink_x64.dll', size_mb=24.5,
+        download_url='https://www.segger.com/downloads/jlink/',
+    ),
+    DependencyItem(
+        name='JLinkARM.dll', dep_type=DependencyType.DLL,
+        description='J-Link 驱动DLL (32位)', backend=BackendType.JLINK,
+        required=False, filename='JLinkARM.dll', size_mb=20.0,
+        download_url='https://www.segger.com/downloads/jlink/',
+    ),
+]
+
+PYOCD_CORE_DEPENDENCIES = [
+    DependencyItem(
+        name='pyocd', dep_type=DependencyType.PYTHON_PACKAGE,
+        description='PyOCD调试核心 (统一支持DAP-Link/ST-Link)', backend=None,
+        required=True, version_constraint='>=0.36.0',
+        download_url='pip:pyocd>=0.36.0', size_mb=22.0,
+    ),
+    DependencyItem(
+        name='usb1', dep_type=DependencyType.PYTHON_PACKAGE,
+        description='libusb1 Python绑定', backend=None,
+        required=True, download_url='pip:libusb1', size_mb=0.5,
+    ),
+    DependencyItem(
+        name='usb', dep_type=DependencyType.PYTHON_PACKAGE,
+        description='PyUSB USB设备枚举', backend=None,
+        required=True, download_url='pip:pyusb', size_mb=0.4,
+    ),
+    DependencyItem(
+        name='libusb-1.0.dll', dep_type=DependencyType.DLL,
+        description='USB驱动库', backend=None,
+        required=False, filename='libusb-1.0.dll', size_mb=0.1,
+    ),
+]
+
+DAPLINK_PLUGIN_DEPENDENCIES = [
+    DependencyItem(
+        name='Renesas.RA_DFP', dep_type=DependencyType.PACK,
+        description='瑞萨RA CMSIS Pack (示例)', backend=BackendType.DAPLINK,
+        required=False, filename='Renesas.RA_DFP.6.1.0.pack', size_mb=2.0,
+        download_url='https://developer.arm.com/tools-and-software/open-source-software/developer-tools/cmsis-pack',
+    ),
+]
+
+STLINK_PLUGIN_DEPENDENCIES = []
+
+BACKEND_DEPENDENCIES: Dict[BackendType, List[DependencyItem]] = {
+    BackendType.JLINK: JLINK_DEPENDENCIES,
+    BackendType.DAPLINK: DAPLINK_PLUGIN_DEPENDENCIES,
+    BackendType.STLINK: STLINK_PLUGIN_DEPENDENCIES,
+}
+
+BACKEND_INFO = {
+    BackendType.JLINK: {
+        'name': 'J-Link',
+        'description': 'SEGGER J-Link 调试器',
+        'icon': 'J',
+        'vendors': 'SEGGER',
+        'needs_pyocd_core': False,
+    },
+    BackendType.DAPLINK: {
+        'name': 'DAP-Link',
+        'description': 'CMSIS-DAP探针 (DAP-Link/NXP LPC-Link/Picoprobe等)',
+        'icon': 'D',
+        'vendors': 'ARM/兼容',
+        'needs_pyocd_core': True,
+    },
+    BackendType.STLINK: {
+        'name': 'ST-Link',
+        'description': 'STMicroelectronics ST-Link (v2/v2-1/v3)',
+        'icon': 'S',
+        'vendors': 'ST',
+        'needs_pyocd_core': True,
+    },
+}
+
+
+def _needs_pyocd_core(selected_backends: List[BackendType]) -> bool:
+    return any(BACKEND_INFO.get(bt, {}).get('needs_pyocd_core', False) for bt in selected_backends)
+
+
+def get_all_dependencies(selected_backends: List[BackendType] = None) -> List[DependencyItem]:
+    deps = list(SYSTEM_DEPENDENCIES)
+    if selected_backends is None:
+        selected_backends = list(BackendType)
+
+    has_jlink = BackendType.JLINK in selected_backends
+    has_pyocd_bt = _needs_pyocd_core(selected_backends)
+
+    if has_jlink:
+        deps.extend(JLINK_DEPENDENCIES)
+
+    if has_pyocd_bt:
+        deps.extend(PYOCD_CORE_DEPENDENCIES)
+
+    for bt in selected_backends:
+        for d in BACKEND_DEPENDENCIES.get(bt, []):
+            if d.dep_type == DependencyType.PYTHON_PACKAGE and d.name in [x.name for x in deps]:
+                continue
+            if d.dep_type == DependencyType.DLL and d.filename in [x.filename for x in deps if hasattr(x, 'filename')]:
+                continue
+            deps.append(d)
+
+    return deps
+
+
+DEPENDENCY_LIST = get_all_dependencies()
+
+
+def get_python_dependencies(selected_backends: List[BackendType] = None) -> List[DependencyItem]:
+    return [d for d in get_all_dependencies(selected_backends) if d.dep_type == DependencyType.PYTHON_PACKAGE]
+
+
+def get_dll_dependencies(selected_backends: List[BackendType] = None) -> List[DependencyItem]:
+    return [d for d in get_all_dependencies(selected_backends) if d.dep_type == DependencyType.DLL]
+
+
+def get_pack_dependencies(selected_backends: List[BackendType] = None) -> List[DependencyItem]:
+    return [d for d in get_all_dependencies(selected_backends) if d.dep_type == DependencyType.PACK]
+
+
+def get_pip_install_list(selected_backends: List[BackendType] = None) -> List[str]:
+    packages = []
+    for d in get_python_dependencies(selected_backends):
+        if d.download_url.startswith('pip:'):
+            pkg_spec = d.download_url[4:]
+            if pkg_spec not in packages:
+                packages.append(pkg_spec)
+    return packages
+
+
+def get_backend_size_mb(bt: BackendType, selected_backends: List[BackendType] = None) -> float:
+    if selected_backends is None:
+        selected_backends = [bt]
+    total = 0.0
+    if bt == BackendType.JLINK:
+        total = sum(d.size_mb for d in JLINK_DEPENDENCIES)
+    else:
+        other_pyocd = any(b != bt and BACKEND_INFO.get(b, {}).get('needs_pyocd_core', False)
+                          for b in (selected_backends or []))
+        if not other_pyocd:
+            total += sum(d.size_mb for d in PYOCD_CORE_DEPENDENCIES)
+        total += sum(d.size_mb for d in BACKEND_DEPENDENCIES.get(bt, []))
+    return total

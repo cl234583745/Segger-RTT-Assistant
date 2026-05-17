@@ -5,17 +5,30 @@ __pycache__/
 *.so
 .Python
 env/
-venv/
 .venv/
 
 # Build
 build/
 dist/
+*.spec.bak
+
+# Runtime (users manage these, too large for git)
+runtime/venv/
+runtime/dll/*.dll
+runtime/packs/*.pack
+!runtime/dll/.gitkeep
+!runtime/packs/.gitkeep
+
+# Config (user-specific, auto-generated)
+config/config.json
+config/devices.txt
+config/pyocd_targets.txt
 
 # Logs
 *.log
-rtt_data*.log
-rtt_data.txt
+
+# Doc build artifacts (keep .md source, ignore generated .html)
+doc/*.html
 
 # Temp files
 frames/
@@ -35,3 +48,4 @@ ScreenShot*.png
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
