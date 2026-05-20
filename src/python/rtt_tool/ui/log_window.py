@@ -88,8 +88,6 @@ class LogWindow(QWidget):
         self.log_text.setReadOnly(True)
         self.log_text.setStyleSheet("""
             QTextEdit {
-                background-color: #1e1e1e;
-                color: #d4d4d4;
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 10pt;
             }
@@ -107,9 +105,8 @@ class LogWindow(QWidget):
         if not self.refresh_timer.isActive():
             self.refresh_timer.start(1000)
         
-        # 存储所有日志
         self.all_logs = []
-    
+
     def set_log_service(self, log_service):
         """
         设置日志服务

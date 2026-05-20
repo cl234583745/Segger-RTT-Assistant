@@ -21,20 +21,106 @@
 包含工具栏、接收区、发送区、状态栏
 """
 
+import functools
+
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QPushButton, QComboBox,
     QCheckBox, QLabel, QStatusBar, QToolBar, QAction,
     QSplitter, QGroupBox, QFileDialog, QMenu, QMessageBox,
-    QStackedWidget
+    QStackedWidget, QSizePolicy, QActionGroup, QDialog,
+    QFontDialog
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QEvent, QObject, QTimer
 from PyQt5.QtGui import QFont, QTextCursor
+from PyQt5.QtWidgets import QApplication as QApp
 from .connection_dialog import ConnectionDialog
 from .log_window import LogWindow
 from .waveform_widget import WaveformWidget
 from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file, get_exe_dir
 from .. import __version__
+
+
+DARK_STYLESHEET = """
+* { background-color: #2b2b2b; color: #e0e0e0; }
+QGroupBox { border: 1px solid #555; margin-top: 1ex; font-weight: bold; }
+QGroupBox::title { color: #e0e0e0; subcontrol-origin: margin; left: 10px; padding: 0 6px; }
+QTextEdit, QLineEdit, QPlainTextEdit { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
+QComboBox { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; padding-right: 16px; min-width: 60px; }
+QComboBox QAbstractItemView { background-color: #3c3c3c; color: #e0e0e0; selection-background-color: #505050; }
+QPushButton { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; padding: 4px 8px; }
+QPushButton:hover { background-color: #505050; }
+QCheckBox { color: #e0e0e0; spacing: 4px; }
+QSpinBox, QDoubleSpinBox { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; }
+QStatusBar, QToolBar { background-color: #333; color: #e0e0e0; border: none; spacing: 4px; }
+QMenu { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; }
+QMenu::item:selected { background-color: #505050; }
+QSplitter::handle { background-color: #555; }
+QToolTip { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; }
+QHeaderView { background-color: #3c3c3c; color: #e0e0e0; }
+QHeaderView::section { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; padding: 4px; }
+QTableWidget { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
+QTableWidget::item { color: #e0e0e0; }
+QDialog { background-color: #2b2b2b; }
+QListWidget { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
+QRadioButton { color: #e0e0e0; }
+QGroupBox QWidget { background: transparent; }
+"""
+
+
+def set_dark_title_bar(widget, dark):
+    try:
+        import ctypes
+        hwnd = ctypes.wintypes.HWND(int(widget.winId()))
+        DwmSetWindowAttribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        value = ctypes.c_int(2 if dark else 0)
+        for attr_id in (20, 19):
+            DwmSetWindowAttribute(hwnd, attr_id, ctypes.byref(value), ctypes.sizeof(value))
+    except Exception:
+        pass
+
+
+class DarkTitleBarFilter(QObject):
+    """全局事件过滤器：自动为新弹出的顶层窗口设置暗色标题栏。"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dark = False
+
+    def set_dark(self, dark: bool) -> None:
+        self._dark = dark
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow():
+            if self._dark:
+                QTimer.singleShot(0, lambda o=obj: set_dark_title_bar(o, True))
+        return super().eventFilter(obj, event)
+
+
+def _patch_qdialog_dark_title_bar():
+    """Monkey-patch QDialog.showEvent 使所有现有和未来的对话框自动应用暗色标题栏。"""
+    original_show = QDialog.showEvent
+    @functools.wraps(original_show)
+    def _show_event(self, event):
+        original_show(self, event)
+        try:
+            from PyQt5.QtWidgets import QApplication as QApp
+            app = QApp.instance()
+            if app is not None:
+                dark = app.property('_dark_theme')
+                if dark is None or dark:
+                    set_dark_title_bar(self, True)
+        except Exception:
+            pass
+    QDialog.showEvent = _show_event
+
+
+def install_dark_title_bar_filter(app):
+    """在 QApplication 上安装全局暗色标题栏过滤器 + 自动补丁所有 QDialog。"""
+    filter_ = DarkTitleBarFilter(app)
+    app.installEventFilter(filter_)
+    app.setProperty('_dark_title_bar_filter', filter_)
+    _patch_qdialog_dark_title_bar()
+    return filter_
 
 
 class MainWindow(QMainWindow):
@@ -55,12 +141,12 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.log_window = None  # 日志窗口
-        self.log_service = None  # 日志服务(由controller设置)
-        self.device_info_service = None  # 设备信息服务(由controller设置)
-        self.last_config = {}  # 上次的连接配置
+        _t0 = __import__('time').perf_counter()
+        self.log_window = None
+        self.log_service = None
+        self.device_info_service = None
+        self.last_config = {}
         
-        # 收发数据日志文件
         from datetime import datetime
         import os
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -70,7 +156,6 @@ class MainWindow(QMainWindow):
 
         self._max_display_lines = 1000
         
-        # 打开数据日志文件
         try:
             self.data_log_handle = open(self.data_log_file, 'a', encoding='utf-8')
             self.data_log_handle.write(f"RTT Assistant 收发数据日志\n")
@@ -81,6 +166,7 @@ class MainWindow(QMainWindow):
             print(f"无法创建数据日志文件: {e}")
         
         self.init_ui()
+        print(f"[perf] MainWindow.__init__: {(__import__('time').perf_counter()-_t0)*1000:.0f}ms")
     
     def init_ui(self):
         """初始化UI"""
@@ -154,8 +240,8 @@ class MainWindow(QMainWindow):
         send_group = self._create_send_area()
         splitter.addWidget(send_group)
         
-        # 设置初始比例(显示区:发送区 = 3:1)
-        splitter.setSizes([500, 200])
+        # 设置初始比例(显示区大, 发送区~2行)
+        splitter.setSizes([600, 120])
         
         main_layout.addWidget(splitter)
         
@@ -230,20 +316,6 @@ class MainWindow(QMainWindow):
         
         toolbar.addSeparator()
         
-        # 窗口置顶
-        self.topmost_checkbox = QCheckBox("置顶")
-        self.topmost_checkbox.setToolTip("窗口置顶")
-        self.topmost_checkbox.stateChanged.connect(
-            lambda state: self.setWindowFlag(
-                Qt.WindowStaysOnTopHint,
-                state == Qt.Checked
-            )
-        )
-        self.topmost_checkbox.stateChanged.connect(self.show)
-        toolbar.addWidget(self.topmost_checkbox)
-        
-        toolbar.addSeparator()
-        
         # 工具菜单
         tool_menu = QMenu("工具", self)
         
@@ -252,6 +324,23 @@ class MainWindow(QMainWindow):
         font_action.setToolTip("设置字体")
         font_action.triggered.connect(self._on_font_clicked)
         tool_menu.addAction(font_action)
+        
+        tool_menu.addSeparator()
+        
+        # 主题切换
+        theme_menu = QMenu("主题", self)
+        self._theme_dark_action = QAction("暗色", self)
+        self._theme_dark_action.setCheckable(True)
+        self._theme_light_action = QAction("亮色", self)
+        self._theme_light_action.setCheckable(True)
+        self._theme_group = QActionGroup(self)
+        self._theme_group.addAction(self._theme_dark_action)
+        self._theme_group.addAction(self._theme_light_action)
+        self._theme_group.setExclusive(True)
+        self._theme_group.triggered.connect(self._on_tools_theme_changed)
+        theme_menu.addAction(self._theme_dark_action)
+        theme_menu.addAction(self._theme_light_action)
+        tool_menu.addMenu(theme_menu)
         
         tool_menu.addSeparator()
         
@@ -373,6 +462,18 @@ class MainWindow(QMainWindow):
         log_button = QPushButton("日志")
         log_button.setMenu(log_menu)
         toolbar.addWidget(log_button)
+
+        # 弹性空间将置顶按钮推到最右
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+
+        # 窗口置顶按钮（书钉图标）
+        self._pin_btn = QPushButton("📌")
+        self._pin_btn.setToolTip("窗口置顶")
+        self._pin_btn.setCheckable(True)
+        self._pin_btn.toggled.connect(self._on_pin_toggled)
+        toolbar.addWidget(self._pin_btn)
     
     def _create_receive_area(self):
         """创建接收区"""
@@ -391,43 +492,43 @@ class MainWindow(QMainWindow):
         """创建发送区"""
         group = QGroupBox("发送区")
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(3)
         
-        # 发送选项布局
-        option_layout = QHBoxLayout()
+        # 发送文本框（占主要空间）
+        self.send_input = QTextEdit()
+        self.send_input.setFont(QFont("Courier New", 10))
+        self.send_input.setMinimumHeight(20)
+        self.send_input.setPlaceholderText("Enter=发送  Shift+Enter=换行")
+        self.send_input.installEventFilter(self)
+        layout.addWidget(self.send_input)
         
-        # 发送模式选择
+        # 底部行：模式 + 加换行 + 弹性空间 + 发送按钮
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(4)
+        
+        bottom_layout.addWidget(QLabel("模式:"))
+        
         self.send_mode_combo = QComboBox()
         self.send_mode_combo.addItems(["字符串", "HEX"])
         self.send_mode_combo.setToolTip("发送模式")
-        option_layout.addWidget(QLabel("模式:"))
-        option_layout.addWidget(self.send_mode_combo)
+        fm = self.send_mode_combo.fontMetrics()
+        self.send_mode_combo.setMinimumWidth(fm.horizontalAdvance("字符串") + 30)
+        bottom_layout.addWidget(self.send_mode_combo)
         
-        # 是否加换行
         self.add_newline_checkbox = QCheckBox("加换行")
         self.add_newline_checkbox.setToolTip("发送时自动添加换行符")
-        option_layout.addWidget(self.add_newline_checkbox)
+        bottom_layout.addWidget(self.add_newline_checkbox)
         
-        option_layout.addStretch()
-        
-        layout.addLayout(option_layout)
-        
-        # 发送文本框(多行)
-        self.send_input = QTextEdit()
-        self.send_input.setFont(QFont("Courier New", 10))
-        self.send_input.setMaximumHeight(150)  # 设置最大高度
-        self.send_input.setToolTip("输入要发送的数据")
-        layout.addWidget(self.send_input)
-        
-        # 发送按钮
-        send_btn_layout = QHBoxLayout()
-        send_btn_layout.addStretch()
+        bottom_layout.addStretch()
         
         send_btn = QPushButton("发送")
-        send_btn.setToolTip("发送数据")
+        send_btn.setToolTip("发送数据 (或按 Enter 直接发送)\nShift+Enter 换行")
         send_btn.clicked.connect(self._on_send_clicked)
-        send_btn_layout.addWidget(send_btn)
+        bottom_layout.addWidget(send_btn)
         
-        layout.addLayout(send_btn_layout)
+        layout.addLayout(bottom_layout)
         
         return group
     
@@ -437,8 +538,9 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         
         # 创建状态标签
-        self.status_label = QLabel("未连接")
+        self.status_label = QLabel()
         self.status_bar.addWidget(self.status_label)
+        self.set_status("未连接")
         
         # 添加分隔符
         self.status_bar.addWidget(QLabel("  |  "))
@@ -454,6 +556,15 @@ class MainWindow(QMainWindow):
         self.tx_label = QLabel("TX: 0")
         self.status_bar.addWidget(self.tx_label)
         
+        # 添加分隔符
+        self.status_bar.addWidget(QLabel("  |  "))
+        
+        # 重置按钮
+        self.reset_btn = QPushButton("重置")
+        self.reset_btn.setToolTip("重置收发计数")
+        self.reset_btn.clicked.connect(self.reset_counters_requested.emit)
+        self.status_bar.addWidget(self.reset_btn)
+        
         # 添加弹性空间
         self.status_bar.addWidget(QLabel(""), 1)
         
@@ -461,14 +572,50 @@ class MainWindow(QMainWindow):
         self.probe_info_label = QLabel("")
         self.probe_info_label.setStyleSheet("color: #666666;")
         self.status_bar.addPermanentWidget(self.probe_info_label)
-        
-        # 重置按钮
-        self.reset_btn = QPushButton("重置")
-        self.reset_btn.setToolTip("重置收发计数")
-        self.reset_btn.setMaximumWidth(60)
-        self.reset_btn.clicked.connect(self.reset_counters_requested.emit)
-        self.status_bar.addPermanentWidget(self.reset_btn)
     
+    def eventFilter(self, obj, event):
+        if obj is self.send_input and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if event.modifiers() & Qt.ShiftModifier:
+                    return super().eventFilter(obj, event)
+                self._on_send_clicked()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _on_pin_toggled(self, checked):
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, checked)
+        self.show()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        theme = getattr(self, '_current_theme', 'dark')
+        set_dark_title_bar(self, theme == 'dark')
+
+    def set_app_theme(self, theme):
+        self._current_theme = theme
+        dark = theme == 'dark'
+        app = QApp.instance()
+        if app is not None:
+            app.setProperty('_dark_theme', dark)
+            app.setStyleSheet(DARK_STYLESHEET if dark else "")
+            _filter = app.property('_dark_title_bar_filter')
+            if _filter:
+                _filter.set_dark(dark)
+        set_dark_title_bar(self, dark)
+        if app is not None:
+            for w in app.topLevelWidgets():
+                if w is not self:
+                    set_dark_title_bar(w, dark)
+        self.waveform_widget.set_color_theme(theme)
+        if hasattr(self, '_theme_group'):
+            self._theme_dark_action.setChecked(theme == 'dark')
+            self._theme_light_action.setChecked(theme == 'light')
+
+    def _on_tools_theme_changed(self, action):
+        theme = 'dark' if action.text() == '暗色' else 'light'
+        self.set_app_theme(theme)
+        self.waveform_widget.theme_changed.emit(theme)
+
     def _on_quick_connect_clicked(self):
         """快速连接按钮点击 - 使用上次配置直接连接"""
         from datetime import datetime
@@ -498,7 +645,9 @@ class MainWindow(QMainWindow):
             pyocd_target=self.last_config.get('pyocd_target', ''),
             probe_name=self.last_config.get('probe_name', ''),
             probe_backend=self.last_config.get('probe_backend', ''),
-            probe_serial=self.last_config.get('probe_serial', '')
+            probe_serial=self.last_config.get('probe_serial', ''),
+            interface=self.last_config.get('interface', 'SWD'),
+            speed=self.last_config.get('speed', 4000)
         )
         
         if self.log_service:
@@ -618,8 +767,11 @@ class MainWindow(QMainWindow):
     def _on_font_clicked(self):
         """字体按钮点击"""
         from PyQt5.QtWidgets import QFontDialog
-        font, ok = QFontDialog.getFont(self.receive_text.font(), self)
-        if ok:
+        dialog = QFontDialog(self.receive_text.font(), self)
+        dialog.setWindowTitle("选择字体")
+        set_dark_title_bar(dialog, getattr(self, '_current_theme', 'dark') == 'dark')
+        if dialog.exec_():
+            font = dialog.selectedFont()
             self.receive_text.setFont(font)
             self.font_changed.emit(font)
     
@@ -632,6 +784,7 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("关键字高亮配置")
         dialog.resize(500, 350)
+        set_dark_title_bar(dialog, getattr(self, '_current_theme', 'dark') == 'dark')
         layout = QVBoxLayout(dialog)
         
         table = QTableWidget(0, 2)
@@ -879,19 +1032,25 @@ class MainWindow(QMainWindow):
         self.disconnect_action.setEnabled(connected)
         
         if connected:
-            self.status_label.setText("已连接")
+            self.set_status("已连接")
             self._update_probe_info()
         else:
-            self.status_label.setText("未连接")
+            self.set_status("未连接")
     
     def set_status(self, text):
-        """
-        设置状态栏文本
-        
-        Args:
-            text: 状态文本
-        """
         self.status_label.setText(text)
+        color_map = {
+            "未连接": "#888888",
+            "连接中": "#FF8800",
+            "已连接": "#00AA00",
+        }
+        bg = color_map.get(text, "")
+        if bg:
+            self.status_label.setStyleSheet(
+                f"background-color: {bg}; color: #ffffff; padding: 0 6px; font-weight: bold; border-radius: 2px;"
+            )
+        else:
+            self.status_label.setStyleSheet("")
     
     def update_rx_bytes(self, count):
         """
@@ -1097,7 +1256,8 @@ class MainWindow(QMainWindow):
         # 创建自定义对话框
         dialog = QDialog(self)
         dialog.setWindowTitle("关于 RTT Assistant")
-        dialog.setFixedSize(450, 450)
+        dialog.setFixedSize(450, 500)
+        set_dark_title_bar(dialog, getattr(self, '_current_theme', 'dark') == 'dark')
         
         layout = QVBoxLayout(dialog)
         
@@ -1148,14 +1308,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(bilibili_label)
         
         # GitHub(可点击)
-        github_label = QLabel('<p><a href="https://github.com/cl234583745" style="text-decoration:none; color:#0000ff;"><b>GitHub:</b> cl234583745</a></p>')
+        github_label = QLabel('<p><a href="https://github.com/cl234583745/RTT-Assistant" style="text-decoration:none; color:#0000ff;"><b>GitHub:</b> cl234583745</a></p>')
         github_label.setAlignment(Qt.AlignCenter)
         github_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
         github_label.setOpenExternalLinks(True)
         layout.addWidget(github_label)
         
         # Gitee(可点击)
-        gitee_label = QLabel('<p><a href="https://gitee.com/292812832" style="text-decoration:none; color:#0000ff;"><b>Gitee:</b> 292812832</a></p>')
+        gitee_label = QLabel('<p><a href="https://gitee.com/292812832/RTT-Assistant" style="text-decoration:none; color:#0000ff;"><b>Gitee:</b> 292812832</a></p>')
         gitee_label.setAlignment(Qt.AlignCenter)
         gitee_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
         gitee_label.setOpenExternalLinks(True)
@@ -1163,7 +1323,12 @@ class MainWindow(QMainWindow):
         
         # 分隔线
         layout.addWidget(QLabel("<hr>"))
-        
+
+        # 检查更新按钮
+        check_update_btn = QPushButton("检查更新")
+        check_update_btn.clicked.connect(lambda: self._on_check_update(dialog))
+        layout.addWidget(check_update_btn)
+
         # 版权信息
         copyright_label = QLabel("<p>© 2024 RTT Assistant. All rights reserved.</p>")
         copyright_label.setAlignment(Qt.AlignCenter)
@@ -1175,7 +1340,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(ok_btn)
         
         dialog.exec_()
-    
+
+    def _on_check_update(self, parent):
+        from .update_dialog import UpdateDialog
+        dlg = UpdateDialog(parent)
+        dlg.exec_()
+
     def _show_qrcode(self, parent):
         """显示公众号二维码"""
         import os

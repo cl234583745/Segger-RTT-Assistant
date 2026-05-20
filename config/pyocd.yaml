@@ -1,4 +1,2 @@
 pack:
-  - ../runtime/packs/Keil_STM32H7xx_DFP_4.1.3.pack
   - ../runtime/packs/Keil_STM32U5xx_DFP_3.2.0.pack
-  - ../runtime/packs/Renesas_RA_DFP_6.4.0.pack

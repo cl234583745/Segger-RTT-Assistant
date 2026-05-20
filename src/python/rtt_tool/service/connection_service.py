@@ -134,10 +134,9 @@ class ConnectionService(QObject):
                     if rtt_cli_flags:
                         cli += f' {rtt_cli_flags}'
                 elif bt == 'jlink':
-                    cli = f'pyocd rtt --target {target_str} -f {speed_val}k --connect={mode}'
+                    cli = f'JLinkRTTLogger -Device {target_str} -Interface SWD -Speed {speed_val}'
                     if rtt_cli_flags:
                         cli += f' {rtt_cli_flags}'
-                    cli += '  # J-Link也可用: JLinkRTTLogger / JLinkRTTClient'
                 else:
                     cli = f'pyocd rtt --target {target_str}'
                 self.log_service.info(f'等效命令行: {cli}')

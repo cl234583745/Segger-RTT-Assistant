@@ -91,30 +91,42 @@ def build():
 
     print(f"输出目录: {dist_dir}")
 
-    # Copy config/
+    # Copy config/ (only pyocd.yaml, rest auto-generated)
     config_src = os.path.join(ROOT_DIR, 'config')
     config_dst = os.path.join(dist_dir, 'config')
     if os.path.isdir(config_src):
-        if os.path.isdir(config_dst):
-            shutil.rmtree(config_dst)
-        shutil.copytree(config_src, config_dst)
-        print(f"  已复制 config/")
+        os.makedirs(config_dst, exist_ok=True)
+        for f in ['pyocd.yaml']:
+            src = os.path.join(config_src, f)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(config_dst, f))
+                print(f"  已复制 config/{f}")
+        print(f"  已复制 config/ (仅 {', '.join(os.listdir(config_dst))})")
 
-    # Copy doc/ (html+images only, no md)
+    # Copy doc/ (convert .md to .html, copy .pdf and images/)
     doc_src = os.path.join(ROOT_DIR, 'doc')
     doc_dst = os.path.join(dist_dir, 'doc')
     if os.path.isdir(doc_src):
         if os.path.isdir(doc_dst):
             shutil.rmtree(doc_dst)
         os.makedirs(doc_dst, exist_ok=True)
+        from markdown import markdown
+        _CSS = "<meta charset='utf-8'><style>body{font-family:'Microsoft YaHei',sans-serif;max-width:900px;margin:0 auto;padding:20px;line-height:1.8}pre{background:#f5f5f5;padding:10px;border-radius:4px;overflow-x:auto}code{background:#f0f0f0;padding:2px 4px;border-radius:2px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6px 10px;text-align:left}th{background:#eee}</style>"
         for item in os.listdir(doc_src):
             src_item = os.path.join(doc_src, item)
-            dst_item = os.path.join(doc_dst, item)
-            if item.endswith('.html'):
-                shutil.copy2(src_item, dst_item)
+            name, ext = os.path.splitext(item)
+            if ext == '.md':
+                with open(src_item, encoding='utf-8') as f:
+                    html = _CSS + markdown(f.read(), extensions=['fenced_code', 'tables', 'codehilite'])
+                dst_path = os.path.join(doc_dst, name + '.html')
+                with open(dst_path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+                print(f"  已转换 doc/{item} -> doc/{name}.html")
+            elif ext == '.html':
+                shutil.copy2(src_item, os.path.join(doc_dst, item))
             elif item == 'images' and os.path.isdir(src_item) and os.listdir(src_item):
-                shutil.copytree(src_item, dst_item)
-        print(f"  已复制 doc/ (html+images)")
+                shutil.copytree(src_item, os.path.join(doc_dst, 'images'))
+        print(f"  已复制 doc/ (md→html + images)")
 
     # Copy images/ (if exists at root level)
     images_src = os.path.join(ROOT_DIR, 'images')
@@ -125,14 +137,17 @@ def build():
         shutil.copytree(images_src, images_dst)
         print(f"  已复制 images/")
 
-    # Copy resources/
+    # Copy resources/ (only RTT.zip, icons, png)
     res_src = os.path.join(ROOT_DIR, 'resources')
     res_dst = os.path.join(dist_dir, 'resources')
     if os.path.isdir(res_src):
-        if os.path.isdir(res_dst):
-            shutil.rmtree(res_dst)
-        shutil.copytree(res_src, res_dst)
-        print(f"  已复制 resources/")
+        os.makedirs(res_dst, exist_ok=True)
+        for f in ['RTT.zip', 'icon.ico', 'duokajiangfllpll.png']:
+            src = os.path.join(res_src, f)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(res_dst, f))
+                print(f"  已复制 resources/{f}")
+        print(f"  已复制 resources/ ({', '.join(os.listdir(res_dst))})")
 
     # Copy runtime/ structure (dll, packs, venv)
     runtime_src = os.path.join(ROOT_DIR, 'runtime')
@@ -147,7 +162,7 @@ def build():
         if os.path.isdir(venv_dst):
             shutil.rmtree(venv_dst)
 
-        _CRITICAL_VENV_PACKAGES = ['pyocd', 'usb', 'usb1', 'PyQt5']
+        _CRITICAL_VENV_PACKAGES = ['pyocd', 'usb', 'usb1']
 
         def _copy_venv_with_retry(src, dst, max_retries=3):
             import stat

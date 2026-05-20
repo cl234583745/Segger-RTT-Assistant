@@ -48,6 +48,7 @@ class JLinkBackend(DebuggerBackend):
     def disconnect(self) -> None:
         if self._wrapper is not None:
             self._wrapper.disconnect()
+            self._wrapper = None
 
     def init_rtt(self, rtt_address: int = None, rtt_mode: str = 'auto',
                  range_start: int = None, range_end: int = None) -> bool:

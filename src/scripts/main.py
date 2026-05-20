@@ -40,9 +40,10 @@ def exception_hook(exctype, value, traceback):
 
     try:
         from datetime import datetime
-        from rtt_tool.utils.resource_utils import get_exe_dir
+        from rtt_tool.runtime.path_config import RUNTIME_LOG_DIR
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-        log_path = os.path.join(get_exe_dir(), 'rtt_system.log')
+        os.makedirs(RUNTIME_LOG_DIR, exist_ok=True)
+        log_path = os.path.join(RUNTIME_LOG_DIR, 'rtt_system.log')
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] [ERROR] {error_msg}\n")
     except:
@@ -90,6 +91,9 @@ def main():
     icon_path = get_resource_path("resources/icon.ico")
     if icon_path and os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
+
+    from rtt_tool.ui.main_window import install_dark_title_bar_filter
+    install_dark_title_bar_filter(app)
 
     from rtt_tool.controller.main_controller import MainController
     controller = MainController()

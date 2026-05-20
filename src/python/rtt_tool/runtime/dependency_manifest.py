@@ -35,18 +35,7 @@ class DependencyItem:
         return self.description or self.name
 
 
-SYSTEM_DEPENDENCIES = [
-    DependencyItem(
-        name='PyQt5', dep_type=DependencyType.SYSTEM_PACKAGE,
-        description='PyQt5 GUI框架 (系统级安装)', required=True,
-        download_url='pip:PyQt5>=5.15.0',
-    ),
-    DependencyItem(
-        name='pyqtgraph', dep_type=DependencyType.SYSTEM_PACKAGE,
-        description='实时波形显示库 (系统级安装)', required=True,
-        download_url='pip:pyqtgraph>=0.12.0',
-    ),
-]
+SYSTEM_DEPENDENCIES = []
 
 JLINK_DEPENDENCIES = [
     DependencyItem(

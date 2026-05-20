@@ -97,6 +97,19 @@ def show_dependency_upgrade_dialog(parent=None):
             self._upgrade_worker = None
             self._init_ui()
 
+        def showEvent(self, event):
+            super().showEvent(event)
+            try:
+                from PyQt5.QtWidgets import QApplication as QApp
+                app = QApp.instance()
+                if app is not None:
+                    dark = app.property('_dark_theme')
+                    if dark is None or dark:
+                        from rtt_tool.ui.main_window import set_dark_title_bar
+                        set_dark_title_bar(self, True)
+            except Exception:
+                pass
+
         def _init_ui(self):
             self.setWindowTitle('依赖管理')
             self.setMinimumSize(900, 550)

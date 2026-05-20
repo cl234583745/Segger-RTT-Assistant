@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication as QApp
 from ..utils.resource_utils import get_external_file, get_exe_dir
 from ..utils.device_info_service import DeviceInfoService
 
@@ -56,7 +57,8 @@ class ConnectionDialog(QDialog):
                  rtt_mode="auto", rtt_range_start="", rtt_range_size="", map_file_path="",
                  log_service=None, device_info_service=None, debugger_manager=None,
                  connect_mode="under_reset", pyocd_target="",
-                 probe_name="", probe_backend="", probe_serial=""):
+                 probe_name="", probe_backend="", probe_serial="",
+                 interface="SWD", speed=4000):
         super().__init__(parent)
         self.setWindowTitle("连接配置")
         self.setModal(True)
@@ -77,6 +79,8 @@ class ConnectionDialog(QDialog):
         self._saved_probe_name = probe_name
         self._saved_probe_backend = probe_backend
         self._saved_probe_serial = probe_serial
+        self._saved_interface = interface
+        self._saved_speed = speed
 
         self._detected_probes = []
         self._current_backend = 'jlink'
@@ -527,13 +531,11 @@ class ConnectionDialog(QDialog):
         jlink_layout.addWidget(self.device_combo)
 
         self.browse_btn = QPushButton("...")
-        self.browse_btn.setFixedWidth(30)
         self.browse_btn.setToolTip("筛选设备型号")
         self.browse_btn.clicked.connect(self._on_browse_device)
         jlink_layout.addWidget(self.browse_btn)
 
         self.update_btn = QPushButton("更新")
-        self.update_btn.setFixedWidth(40)
         self.update_btn.setToolTip("从J-Link DLL更新设备列表到devices.txt")
         self.update_btn.clicked.connect(self._on_update_devices)
         jlink_layout.addWidget(self.update_btn)
@@ -557,19 +559,16 @@ class ConnectionDialog(QDialog):
         pyocd_layout.addWidget(self.pyocd_target_combo)
 
         self.pyocd_browse_btn = QPushButton("...")
-        self.pyocd_browse_btn.setFixedWidth(30)
         self.pyocd_browse_btn.setToolTip("筛选PyOCD目标设备")
         self.pyocd_browse_btn.clicked.connect(self._on_browse_pyocd_target)
         pyocd_layout.addWidget(self.pyocd_browse_btn)
 
         self.pyocd_update_btn = QPushButton("更新")
-        self.pyocd_update_btn.setFixedWidth(40)
         self.pyocd_update_btn.setToolTip("刷新 PyOCD 目标索引")
         self.pyocd_update_btn.clicked.connect(self._on_update_pyocd_targets)
         pyocd_layout.addWidget(self.pyocd_update_btn)
 
         self.pyocd_pack_btn = QPushButton("Pack")
-        self.pyocd_pack_btn.setFixedWidth(40)
         self.pyocd_pack_btn.setToolTip("下载 CMSIS Pack 增强芯片支持")
         self.pyocd_pack_btn.clicked.connect(self._on_download_pack)
         pyocd_layout.addWidget(self.pyocd_pack_btn)
@@ -590,6 +589,10 @@ class ConnectionDialog(QDialog):
         layout.addWidget(QLabel("接口:"))
         self.interface_combo = QComboBox()
         self.interface_combo.addItems(["SWD", "JTAG"])
+        iface = getattr(self, '_saved_interface', 'SWD')
+        idx = self.interface_combo.findText(iface)
+        if idx >= 0:
+            self.interface_combo.setCurrentIndex(idx)
         layout.addWidget(self.interface_combo)
 
         layout.addSpacing(20)
@@ -597,15 +600,31 @@ class ConnectionDialog(QDialog):
         layout.addWidget(QLabel("速度:"))
         self.speed_combo = QComboBox()
         self.speed_combo.addItems([
+            "Default",
+            "125 kHz",
+            "250 kHz",
+            "500 kHz",
             "1000 kHz",
             "2000 kHz",
             "4000 kHz",
+            "6000 kHz",
             "8000 kHz",
             "12000 kHz",
             "16000 kHz",
             "20000 kHz",
+            "24000 kHz",
+            "30000 kHz",
+            "32000 kHz",
+            "40000 kHz",
+            "50000 kHz",
         ])
         self.speed_combo.setCurrentText("4000 kHz")
+        spd = getattr(self, '_saved_speed', 4000)
+        if spd and spd != 0:
+            spd_text = f"{spd} kHz"
+            spd_idx = self.speed_combo.findText(spd_text)
+            if spd_idx >= 0:
+                self.speed_combo.setCurrentIndex(spd_idx)
         layout.addWidget(self.speed_combo)
 
         layout.addSpacing(20)
@@ -1107,7 +1126,10 @@ class ConnectionDialog(QDialog):
     def get_config(self):
         """获取配置信息"""
         speed_str = self.speed_combo.currentText()
-        speed = int(speed_str.split()[0])
+        if speed_str == "Default":
+            speed = 0  # 使用默认速度
+        else:
+            speed = int(speed_str.split()[0])
 
         selected_probe = None
         current_item = self.probe_list.currentItem()

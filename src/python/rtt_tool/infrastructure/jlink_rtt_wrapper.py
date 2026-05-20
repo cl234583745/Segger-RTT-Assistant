@@ -246,9 +246,6 @@ class JLinkRTTWrapper:
     
     def disconnect(self):
         """断开连接"""
-        if not self.connected:
-            return
-        
         try:
             if self.jlink:
                 self.jlink.close()

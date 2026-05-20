@@ -39,6 +39,7 @@ class DataReceiveThread(QThread):
         self._poll_interval_ms = poll_interval_ms
         self.running = False
         self._error_count = 0
+        self._buffer_full_warned = False
     
     def run(self):
         """线程运行函数"""
@@ -53,7 +54,14 @@ class DataReceiveThread(QThread):
                     try:
                         data = self._backend.rtt_read(channel, 1024)
                         if data:
-                            self.buffer.write(data)
+                            written = self.buffer.write(data)
+                            if written < len(data) and not self._buffer_full_warned:
+                                self._buffer_full_warned = True
+                                self.error_occurred.emit(
+                                    f"环形缓冲区已满，丢弃 {len(data) - written} 字节 "
+                                    f"(缓冲大小={self.buffer.size}, 通道={channel})")
+                            elif written >= len(data):
+                                self._buffer_full_warned = False
                             self.data_received.emit(channel, data)
                         self._error_count = 0
                     except Exception as e:

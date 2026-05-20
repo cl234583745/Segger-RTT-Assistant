@@ -41,9 +41,10 @@ class PyOCDTargetEntry:
 
 
 def _get_pyocd_exe() -> str:
-    pyocd_exe = os.path.join(RUNTIME_VENV_SCRIPTS, 'pyocd.exe')
-    if os.path.isfile(pyocd_exe):
-        return pyocd_exe
+    """返回 venv 的 python.exe，调用方用 -m pyocd 代替直接运行 pyocd.exe 启动器。"""
+    py_exe = os.path.join(RUNTIME_VENV_SCRIPTS, 'python.exe')
+    if os.path.isfile(py_exe):
+        return py_exe
     return None
 
 
@@ -381,7 +382,7 @@ def find_pack_for_target(target_name: str, log_service=None) -> tuple:
         return False, 'pyocd 未找到'
     try:
         result = subprocess.run(
-            [pyocd_exe, 'pack', 'find', target_name],
+            [pyocd_exe, '-m', 'pyocd', 'pack', 'find', target_name],
             capture_output=True, text=True, timeout=30,
             creationflags=_subprocess_flags(),
         )
@@ -403,7 +404,7 @@ def install_pack_for_target(target_name: str, progress_callback=None) -> tuple:
             progress_callback(f'正在查找 {target_name} 的 Pack...')
 
         find_result = subprocess.run(
-            [pyocd_exe, 'pack', 'find', target_name],
+            [pyocd_exe, '-m', 'pyocd', 'pack', 'find', target_name],
             capture_output=True, text=True, timeout=30,
             creationflags=_subprocess_flags(),
         )
@@ -421,7 +422,7 @@ def install_pack_for_target(target_name: str, progress_callback=None) -> tuple:
             progress_callback(f'正在下载 {target_name} 的 Pack...')
 
         result = subprocess.run(
-            [pyocd_exe, 'pack', 'install', target_name],
+            [pyocd_exe, '-m', 'pyocd', 'pack', 'install', target_name],
             capture_output=True, text=True, timeout=300,
             creationflags=_subprocess_flags(),
         )
