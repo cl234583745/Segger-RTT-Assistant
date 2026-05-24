@@ -10,6 +10,7 @@ JSOCOPE_PREFIX = "JScope_"
 
 TYPE_MAP = {
     't': {'fmt': 'I', 'size': 4, 'label': 'timestamp', 'is_timestamp': True},
+    't4': {'fmt': 'I', 'size': 4, 'label': 'timestamp', 'is_timestamp': True},
     'i1': {'fmt': 'b', 'size': 1, 'label': 'int8', 'is_timestamp': False},
     'i2': {'fmt': 'h', 'size': 2, 'label': 'int16', 'is_timestamp': False},
     'i4': {'fmt': 'i', 'size': 4, 'label': 'int32', 'is_timestamp': False},

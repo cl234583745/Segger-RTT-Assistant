@@ -33,6 +33,8 @@ from ..processors.log_processor import LogProcessor
 from ..processors.waveform_processor import WaveformProcessor
 from ..processors.high_speed_waveform_processor import HighSpeedWaveformProcessor
 from .acquisition_state_machine import AcquisitionStateMachine
+from .channel_manager import ChannelManager
+from ..models.channel_config import ChannelRoute
 import sys
 
 
@@ -133,11 +135,13 @@ class MainController(QObject):
         self._acquisition_sm = None
         self._rate_timer = None
         self._use_high_speed = False
+        self._use_batch_mode = False
         self._sample_rate_hz = 0
         self._rate_sample_count = 0
         self._rate_check_interval = 0
         self._last_mode_hint_shown = None
         self._render_paused = False
+        self._channel_last_active = {}
         self.show_timestamp = False
         self.hex_display = False
         self.rx_bytes = 0
@@ -180,6 +184,7 @@ class MainController(QObject):
 
         self.receive_service.data_received.connect(self._on_data_received)
         self.receive_service.error_occurred.connect(self._on_error)
+        self.receive_service.batch_received.connect(self._on_batch_received)
 
         self.send_service.data_sent.connect(self._on_data_sent)
         self.send_service.error_occurred.connect(self._on_error)
@@ -187,6 +192,7 @@ class MainController(QObject):
         self.log_processor.text_updated.connect(self._on_log_text_updated)
         self.waveform_processor.waveform_updated.connect(self._on_waveform_updated)
         self._hs_processor.waveform_updated.connect(self._on_hs_waveform_updated)
+        self._hs_processor.frequency_updated.connect(self._on_hs_frequency_updated)
 
         self.receive_service.data_received.connect(self._on_data_received_dispatch)
 
@@ -206,6 +212,64 @@ class MainController(QObject):
         self._rate_timer.setInterval(2000)
         self._rate_timer.timeout.connect(self._on_rate_check)
         self._rate_timer.start()
+
+        self._connect_channel_signals()
+
+    def _connect_channel_signals(self):
+        """连接 ChannelPanel、ChannelManager、WaveformWidget 之间的信号。"""
+        panel = self.window.channel_panel
+        ww = self.window.waveform_widget
+        cm = self._channel_manager
+
+        panel.channel_color_changed.connect(ww.set_channel_color)
+        panel.channel_style_changed.connect(ww.set_channel_style)
+        panel.channel_vdiv_changed.connect(ww.set_channel_vdiv)
+        panel.channel_yoffset_changed.connect(ww.set_channel_yoffset)
+        panel.channel_enabled_changed.connect(ww.set_channel_enabled)
+
+        panel.channel_enabled_changed.connect(cm.set_channel_enabled)
+
+        cm.channel_added.connect(self._on_channel_added)
+        cm.channel_removed.connect(self._on_channel_removed)
+
+        cm.channel_added.connect(lambda ch: panel.add_channel_card(
+            ch, cm.get_channel_config(ch).to_dict() if cm.get_channel_config(ch) else None))
+
+        cm.channel_removed.connect(panel.remove_channel_card)
+
+        cm.channel_enabled_changed.connect(self._on_channel_enabled_changed)
+
+        for ch in cm.get_active_channels():
+            config = cm.get_channel_config(ch)
+            panel.add_channel_card(ch, config.to_dict() if config else None)
+            ww.add_channel(ch)
+            if config:
+                ww.set_channel_color(ch, config.color)
+
+    def _on_channel_added(self, channel: int):
+        config = self._channel_manager.get_channel_config(channel)
+        if config:
+            self.window.waveform_widget.add_channel(channel)
+            self.window.waveform_widget.set_channel_color(channel, config.color)
+        else:
+            self.window.waveform_widget.add_channel(channel)
+        if self.log_service:
+            self.log_service.info(f"[通道] 添加 CH{channel}")
+        if self.receive_service and self.receive_service.is_receiving():
+            backend = self.connection_service.get_backend()
+            if backend:
+                rtt_channels = self._channel_manager.get_enabled_rtt_channels()
+                if self.receive_service.receive_thread:
+                    self.receive_service.receive_thread.set_channels(rtt_channels)
+
+    def _on_channel_removed(self, channel: int):
+        self.window.waveform_widget.remove_channel(channel)
+
+    def _on_channel_enabled_changed(self, channel: int, enabled: bool):
+        if self.receive_service and self.receive_service.is_receiving():
+            rtt_channels = self._channel_manager.get_enabled_rtt_channels()
+            if self.receive_service.receive_thread:
+                self.receive_service.receive_thread.set_channels(rtt_channels)
 
     def _init_phase2(self):
         """Phase 2：延迟加载的后端、服务、处理器。"""
@@ -254,7 +318,7 @@ class MainController(QObject):
 
         self.log_processor = LogProcessor(log_service=self.log_service)
         self.waveform_processor = WaveformProcessor(
-            buffer_size=1024, channels=[1], data_log_handle=self.window.data_log_handle)
+            buffer_size=1024, channels=list(range(1, 11)), data_log_handle=self.window.data_log_handle)
         _t3 = _time.perf_counter()
 
         self._hs_thread = QThread()
@@ -270,10 +334,16 @@ class MainController(QObject):
         self._hs_bridge.sampling_rate_changed.connect(self._hs_processor.set_sampling_rate)
 
         self._acquisition_sm = AcquisitionStateMachine()
+        self._channel_manager = ChannelManager()
         _t4 = _time.perf_counter()
 
         self._connect_service_signals()
         self._connect_log_service()
+
+        self._channel_manager.ensure_all_channels()
+
+        self.window.waveform_widget.set_config_service(self.config_service)
+        self.window.restore_display_mode()
 
         self.window.set_status("就绪")
         _t5 = _time.perf_counter()
@@ -369,9 +439,40 @@ class MainController(QObject):
         if success:
             backend = self.connection_service.get_backend()
             if backend:
-                # 启动数据接收 - 同时监听通道0(日志)和通道1(示波器)
-                self.receive_service.start_receive(backend, channels=[0, 1])
+                if hasattr(self, '_channel_manager') and self._channel_manager:
+                    rtt_channels = self._channel_manager.get_enabled_rtt_channels()
+                    log_channels = [0]
+                    actual_up = [0]
+                    if hasattr(backend, '_rtt_cb') and backend._rtt_cb:
+                        actual_up = list(range(len(backend._rtt_cb.up_channels)))
+                    elif hasattr(backend, '_wrapper') and hasattr(backend._wrapper, 'jlink') and backend._wrapper.jlink:
+                        try:
+                            status = backend._wrapper.jlink.rtt_get_status()
+                            actual_up = list(range(status.NumUpBuffers))
+                        except Exception:
+                            actual_up = [0, 1]
+                    all_channels = sorted(set(log_channels) | (set(rtt_channels) & set(actual_up)))
+                    rtt_cb = getattr(backend, '_rtt_cb', None)
+                    for ch in rtt_channels:
+                        if ch in actual_up:
+                            ch_name = ''
+                            ch_format = ''
+                            buf_size = 0
+                            if rtt_cb and ch < len(rtt_cb.up_channels):
+                                ch_obj = rtt_cb.up_channels[ch]
+                                ch_name = getattr(ch_obj, 'name', '') or ''
+                                buf_size = getattr(ch_obj, 'size', 0) or 0
+                            jscope_fields = self.waveform_processor._channel_jscope_fields.get(ch)
+                            if jscope_fields:
+                                ch_format = 'JScope(' + ','.join(f.get('label','?') for f in jscope_fields) + ')'
+                            log_h = self.window.create_channel_log(ch, ch_name=ch_name, ch_format=ch_format, buf_size=buf_size)
+                            if log_h:
+                                self.waveform_processor.set_channel_log_handle(ch, log_h)
+                else:
+                    all_channels = [0, 1]
+                self.receive_service.start_receive(backend, channels=all_channels)
                 self.send_service.set_backend(backend)
+                self._use_batch_mode = hasattr(backend, 'rtt_read_all')
 
                 # 更新UI状态
                 self.window.set_connected(True)
@@ -449,7 +550,22 @@ class MainController(QObject):
             'rtt_range_start': last_config.get('rtt_range_start', ''),
             'rtt_range_size': last_config.get('rtt_range_size', ''),
             'map_file_path': last_config.get('map_file_path', ''),
+            'ip_address': last_config.get('ip_address', ''),
+            'probe_serial': last_config.get('probe_serial', ''),
+            'probe_name': last_config.get('probe_name', ''),
+            'probe_backend': last_config.get('probe_backend', ''),
         }
+        
+        if not config.get('serial_number') and config.get('probe_serial'):
+            config['serial_number'] = config['probe_serial']
+        
+        if (config.get('debugger_type', 'jlink') == 'jlink'
+                and not config.get('serial_number')
+                and not config.get('ip_address')):
+            self.window.set_status("请先在配置页面刷新探针并选择")
+            if self.log_service:
+                self.log_service.warning("未选择J-Link探针，请在配置页面刷新探针列表后选择")
+            return
         
         # 使用配置连接
         self._on_connect_requested(config)
@@ -522,10 +638,45 @@ class MainController(QObject):
         # 记录日志
         self.log_service.add_log(f"发送完成: {num_bytes} 字节", 'SUCCESS')
     
+    def _on_batch_received(self, poll_time: float, batch: list):
+        """批量数据接收 - 同一poll时刻的多通道数据，共享时间基准"""
+        if not self._acquisition_sm.is_running() and not self._acquisition_sm.is_paused():
+            return
+        for channel, data in batch:
+            self.rx_bytes += len(data)
+            self.window.update_rx_bytes(self.rx_bytes)
+            if hasattr(self, '_channel_manager') and self._channel_manager:
+                self._channel_manager.on_data_activity(channel)
+            panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+            if panel:
+                panel.set_channel_active(channel, True)
+            self._channel_last_active[channel] = __import__('time').perf_counter()
+            if channel not in self.waveform_processor._channel_jscope_fields:
+                self._discover_channel_format(channel)
+            if channel in self.log_processor.get_supported_channels():
+                self.log_processor.process(channel, data)
+        if self._use_high_speed:
+            for channel, data in batch:
+                if channel in self.waveform_processor.get_supported_channels():
+                    self._hs_bridge.data_ready.emit(channel, data)
+            return
+        self.waveform_processor.process_batch(poll_time, batch)
+
     def _on_data_received_dispatch(self, channel, data):
         """数据接收分发到处理器"""
         self.rx_bytes += len(data)
         self.window.update_rx_bytes(self.rx_bytes)
+        
+        if hasattr(self, '_channel_manager') and self._channel_manager:
+            self._channel_manager.on_data_activity(channel)
+        
+        if channel > 0:
+            panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+            if panel:
+                panel.set_channel_active(channel, True)
+            self._channel_last_active[channel] = __import__('time').perf_counter()
+            if channel not in self.waveform_processor._channel_jscope_fields:
+                self._discover_channel_format(channel)
         
         if channel in self.log_processor.get_supported_channels():
             self.log_processor.process(channel, data)
@@ -535,12 +686,17 @@ class MainController(QObject):
         channel_supported = channel in self.waveform_processor.get_supported_channels()
         
         if acquisition_active and channel_supported:
-            # 估算数据速率（无论哪种模式都计数）
+            if not hasattr(self, '_dispatch_log_shown'):
+                self._dispatch_log_shown = set()
+            if channel not in self._dispatch_log_shown:
+                self._dispatch_log_shown.add(channel)
+                if self.log_service:
+                    self.log_service.info(f"[数据分发] CH{channel} 数据到达: {len(data)}字节, 高速={self._use_high_speed}")
             self._rate_sample_count += len(data)
             
             if self._use_high_speed:
                 self._hs_bridge.data_ready.emit(channel, data)
-            else:
+            elif not self._use_batch_mode:
                 self.waveform_processor.process(channel, data)
         elif channel == 1 and not acquisition_active:
             if not hasattr(self, '_ch1_warning_shown'):
@@ -558,6 +714,18 @@ class MainController(QObject):
             return
         
         timestamps, all_values = self.waveform_processor.get_buffer_data(channel)
+        if len(all_values) > 0:
+            if not hasattr(self, '_waveform_log_shown'):
+                self._waveform_log_shown = set()
+            if channel not in self._waveform_log_shown:
+                self._waveform_log_shown.add(channel)
+            if len(self._waveform_log_shown) <= 10 or (len(timestamps) > 0 and len(timestamps) % 500 == 0):
+                import logging
+                ts_range = f'[{timestamps[0]:.4f}, {timestamps[-1]:.4f}]' if timestamps else '[]'
+                unique_vals = len(set(all_values))
+                logging.getLogger(__name__).info(
+                    f"[waveform] CH{channel}: {len(all_values)}pts, {unique_vals} unique vals, "
+                    f"range=[{min(all_values):.1f},{max(all_values):.1f}], ts={ts_range}")
         self.window.waveform_widget.update_data(channel, timestamps, all_values)
 
     def _on_hs_waveform_updated(self, channel, timestamps, values):
@@ -566,6 +734,13 @@ class MainController(QObject):
             return
         
         self.window.waveform_widget.update_data(channel, timestamps, values)
+
+    def _on_hs_frequency_updated(self, channel, frequency):
+        """频率更新（高速处理器 - 基于原始数据计算）"""
+        if self._render_paused or not self._use_high_speed:
+            return
+
+        self.window.waveform_widget.update_frequency(channel, frequency)
     
     def _on_mode_changed(self, mode):
         """显示模式切换"""
@@ -594,10 +769,18 @@ class MainController(QObject):
             self.log_processor.set_hex_mode(enabled)
     
     def _on_error(self, error_msg):
-        """错误处理"""
-        self.window.set_status(f"错误: {error_msg}")
-        # 添加到系统日志
-        self.log_service.add_log(f"错误: {error_msg}", 'ERROR')
+        """错误处理 - 按消息前缀区分日志级别"""
+        if error_msg.startswith('[诊断]'):
+            log_type = 'INFO'
+            self.log_service.add_log(error_msg, log_type)
+        elif any(error_msg.startswith(p) for p in ('环形缓冲区已满', '通道')) or '读取错误' in error_msg:
+            log_type = 'WARNING'
+            self.window.set_status(f"警告: {error_msg}")
+            self.log_service.add_log(f"警告: {error_msg}", log_type)
+        else:
+            log_type = 'ERROR'
+            self.window.set_status(f"错误: {error_msg}")
+            self.log_service.add_log(f"错误: {error_msg}", log_type)
     
     def _connect_log_service(self):
         """连接日志服务到日志窗口"""
@@ -767,14 +950,15 @@ class MainController(QObject):
                 return
             if hasattr(backend, '_wrapper') and hasattr(backend._wrapper, 'jlink') and backend._wrapper.jlink:
                 jlink = backend._wrapper.jlink
-                for ch_idx in range(4):
+                for ch_idx in range(10):
                     try:
                         desc = jlink.rtt_get_buf_descriptor(ch_idx, up=True)
                         name = desc.acName.decode() if isinstance(desc.acName, bytes) else desc.acName
                         if desc.SizeOfBuffer > 0:
-                            mcu_buf_info[ch_idx] = (desc.SizeOfBuffer, name)
+                            mcu_buf_info[ch_idx] = (desc.SizeOfBuffer, name or f"Up[{ch_idx}]")
                         if name and name.startswith("JScope_"):
-                            channel_name = name
+                            self.waveform_processor.set_channel_jscope_format(ch_idx, name)
+                            self._hs_processor.set_channel_jscope_format(ch_idx, name)
                     except Exception:
                         continue
             elif hasattr(backend, '_rtt_cb') and backend._rtt_cb is not None:
@@ -784,7 +968,8 @@ class MainController(QObject):
                         if isinstance(name, bytes):
                             name = name.decode()
                         if name.startswith("JScope_"):
-                            channel_name = name
+                            self.waveform_processor.set_channel_jscope_format(ch_idx, name)
+                            self._hs_processor.set_channel_jscope_format(ch_idx, name)
                     try:
                         buf_size = getattr(ch, 'size', 0) or 0
                         if buf_size > 0:
@@ -794,15 +979,12 @@ class MainController(QObject):
         except Exception:
             pass
 
-        if channel_name:
-            self.waveform_processor.set_jscope_format(channel_name)
         format_text = self.waveform_processor.get_format_text()
-        self.window.waveform_widget.set_format_text(format_text)
+        self._update_channel_format_text(format_text)
 
         if mcu_buf_info:
-            last_ch = max(mcu_buf_info.keys())
-            size, name = mcu_buf_info[last_ch]
-            self.window.waveform_widget.set_mcu_buffer_info(last_ch, size, name)
+            for ch, (sz, nm) in sorted(mcu_buf_info.items()):
+                self._update_channel_mcu_buf(ch, sz, nm)
             if self.log_service:
                 for ch, (sz, nm) in sorted(mcu_buf_info.items()):
                     self.log_service.info(f"  MCU缓冲 CH{ch}: \"{nm}\" 大小={sz}B")
@@ -814,11 +996,15 @@ class MainController(QObject):
                 self.log_service.warning("[示波器] 无法启动采集: 设备未连接")
             return
         
-        # 记录当前配置
         current_format = self.waveform_processor.get_data_format()
-        supported_channels = self.waveform_processor.get_supported_channels()
+        if hasattr(self, '_channel_manager') and self._channel_manager:
+            supported_channels = list(self._channel_manager.get_active_channels())
+            rtt_channels = self._channel_manager.get_enabled_rtt_channels()
+        else:
+            supported_channels = self.waveform_processor.get_supported_channels()
+            rtt_channels = [0]
         if self.log_service:
-            self.log_service.info(f"[示波器] 开始采集 - 格式: {current_format.value}, 监听通道: {supported_channels}")
+            self.log_service.info(f"[示波器] 开始采集 - 格式: {current_format.value}, 监听通道: {supported_channels}, RTT通道: {rtt_channels}")
         
         self._acquisition_sm.start()
         self._render_paused = False
@@ -869,6 +1055,7 @@ class MainController(QObject):
 
     def _on_rate_check(self):
         """每2秒检查一次数据速率，自动切换高速/普通模式。"""
+        self._check_channel_idle()
         if not (self._acquisition_sm.is_running() or self._acquisition_sm.is_paused()):
             self._rate_sample_count = 0
             return
@@ -898,6 +1085,7 @@ class MainController(QObject):
             return
 
         self._use_high_speed = enabled
+        self.window.waveform_widget.set_high_speed_mode(enabled)
         if enabled:
             fmt_text = self.waveform_processor.get_format_text()
             fmt = self.waveform_processor.get_data_format()
@@ -932,8 +1120,58 @@ class MainController(QObject):
         hint = "高速" if enabled else "普通"
         if self.log_service:
             self.log_service.info(f"[示波器] 采集模式: {hint}")
-        self.window.waveform_widget.set_format_text(
+        self._update_channel_format_text(
             f"{self.waveform_processor.get_format_text()} [模式:{hint}]")
+
+    def _update_channel_format_text(self, text: str):
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+        if panel:
+            for ch, card in panel._cards.items():
+                card.set_format_text(text)
+
+    def _update_channel_mcu_buf(self, channel: int, size: int, name: str = ""):
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+        if panel and channel in panel._cards:
+            txt = f"{size}B" if size > 0 else "?"
+            tip = f"CH{channel}: \"{name}\" 大小={size}B" if name else ""
+            panel._cards[channel].set_mcu_buffer_text(txt, tip)
+
+    def _check_channel_idle(self):
+        import time
+        now = time.perf_counter()
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+        if not panel:
+            return
+        for ch, last_t in list(self._channel_last_active.items()):
+            if now - last_t > 2.0:
+                panel.set_channel_active(ch, False)
+                self._channel_last_active.pop(ch, None)
+
+    def _discover_channel_format(self, channel: int):
+        try:
+            backend = self.connection_service.get_backend()
+            if backend is None:
+                return
+            name = None
+            if hasattr(backend, '_wrapper') and hasattr(backend._wrapper, 'jlink') and backend._wrapper.jlink:
+                try:
+                    desc = backend._wrapper.jlink.rtt_get_buf_descriptor(channel, up=True)
+                    name = desc.acName.decode() if isinstance(desc.acName, bytes) else desc.acName
+                except Exception:
+                    pass
+            elif hasattr(backend, '_rtt_cb') and backend._rtt_cb is not None:
+                if channel < len(backend._rtt_cb.up_channels):
+                    ch_obj = backend._rtt_cb.up_channels[channel]
+                    name = getattr(ch_obj, 'name', None)
+                    if isinstance(name, bytes):
+                        name = name.decode()
+            if name and name.startswith("JScope_"):
+                self.waveform_processor.set_channel_jscope_format(channel, name)
+                self._hs_processor.set_channel_jscope_format(channel, name)
+                if self.log_service:
+                    self.log_service.info(f"[通道格式] CH{channel}: {name}")
+        except Exception:
+            pass
 
     def show(self):
         """显示窗口（窗口已在 __init__ 中显示）"""

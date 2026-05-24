@@ -62,6 +62,22 @@ def exception_hook(exctype, value, traceback):
 def main():
     sys.excepthook = exception_hook
 
+    try:
+        import logging
+        from rtt_tool.runtime.path_config import RUNTIME_LOG_DIR
+        import os
+        os.makedirs(RUNTIME_LOG_DIR, exist_ok=True)
+        log_path = os.path.join(RUNTIME_LOG_DIR, 'rtt_debug.log')
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format='[%(asctime)s.%(msecs)03d] [%(levelname)s] %(name)s: %(message)s',
+            datefmt='%H:%M:%S',
+            filename=log_path,
+            filemode='a'
+        )
+    except Exception:
+        pass
+
     from rtt_tool.runtime.runtime_guard import RuntimeGuard
     RuntimeGuard.setup()
 

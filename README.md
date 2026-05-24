@@ -47,7 +47,7 @@
 | **多探针支持** | ✅ J-Link/DAP/ST-Link | ❌ 仅J-Link | ❌ 仅J-Link | ❌ 仅J-Link | ❌ 仅J-Link |
 
 ## 示波器模式使用说明
-
+![](./resources/rtta.gif)
 ### 切换到示波器模式
 
 点击工具栏的"示波器"按钮切换显示模式。
@@ -159,8 +159,8 @@ SEGGER_RTT_Write(1, buf, 5);
 ## 目录结构（打包后）
 
 ```
-RTT-Assistant v2.1.0/
-├── RTT-Assistant v2.1.0.exe   # 主程序
+RTT-Assistant v2.1.1/
+├── RTT-Assistant v2.1.1.exe   # 主程序
 ├── config/                     # 配置文件
 │   └── config.json
 ├── runtime/

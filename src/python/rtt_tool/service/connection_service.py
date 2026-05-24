@@ -167,10 +167,16 @@ class ConnectionService(QObject):
                 except Exception:
                     pass
             error_msg = str(e)
-            self.error_occurred.emit(error_msg)
+            err_type = type(e).__name__
+            hint = ''
+            if err_type == 'AssertionError':
+                hint = ' (PyOCD内部断言失败，请重试连接)'
+            elif 'pop from an empty deque' in error_msg:
+                hint = ' (RTT控制块读取异常，请确认MCU已初始化RTT后重试)'
+            self.error_occurred.emit(f'{error_msg}{hint}')
 
             if self.log_service:
-                self.log_service.error(f'连接失败: {error_msg}')
+                self.log_service.error(f'连接失败: {error_msg}{hint}')
 
             return False
     

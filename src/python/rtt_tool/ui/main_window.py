@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import QApplication as QApp
 from .connection_dialog import ConnectionDialog
 from .log_window import LogWindow
 from .waveform_widget import WaveformWidget
+from .channel_panel import ChannelPanel
 from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file, get_exe_dir
 from .. import __version__
 
@@ -151,19 +152,24 @@ class MainWindow(QMainWindow):
         import os
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         from ..runtime.path_config import RUNTIME_LOG_DIR
-        self.data_log_file = os.path.join(RUNTIME_LOG_DIR, f"rtt_data_{timestamp}.log")
+        self.data_log_file = os.path.join(RUNTIME_LOG_DIR, f"rtt_data_CH0_{timestamp}.log")
         self.data_log_handle = None
+        self._channel_log_handles = {}
 
         self._max_display_lines = 1000
         
         try:
             self.data_log_handle = open(self.data_log_file, 'a', encoding='utf-8')
-            self.data_log_handle.write(f"RTT Assistant 收发数据日志\n")
+            self.data_log_handle.write(f"RTT Assistant CH0 数据日志\n")
             self.data_log_handle.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.data_log_handle.write(f"通道名: Terminal (日志通道)\n")
+            self.data_log_handle.write(f"数据类型: 文本\n")
             self.data_log_handle.write(f"{'='*60}\n\n")
             self.data_log_handle.flush()
         except Exception as e:
             print(f"无法创建数据日志文件: {e}")
+        
+        self._log_timestamp = timestamp
         
         self.init_ui()
         print(f"[perf] MainWindow.__init__: {(__import__('time').perf_counter()-_t0)*1000:.0f}ms")
@@ -220,7 +226,18 @@ class MainWindow(QMainWindow):
         self._oscilloscope_page = QWidget()
         osc_layout = QVBoxLayout(self._oscilloscope_page)
         osc_layout.setContentsMargins(0, 0, 0, 0)
-        osc_layout.addWidget(self.waveform_widget)
+
+        self._osc_splitter = QSplitter(Qt.Horizontal)
+        self._osc_splitter.addWidget(self.waveform_widget)
+
+        self.channel_panel = ChannelPanel()
+        self._osc_splitter.addWidget(self.channel_panel)
+
+        self._osc_splitter.setStretchFactor(0, 3)
+        self._osc_splitter.setStretchFactor(1, 0)
+        self._osc_splitter.setSizes([700, ChannelPanel.COLLAPSED_WIDTH])
+
+        osc_layout.addWidget(self._osc_splitter)
         self._display_stack.addWidget(self._oscilloscope_page)
         
         # 混合模式页面（接收区和波形上下分割）
@@ -233,6 +250,7 @@ class MainWindow(QMainWindow):
         
         # 初始显示日志模式，混合模式页面延迟填充
         self._current_mode = 'log'
+        self._display_stack.setCurrentIndex(0)
         
         splitter.addWidget(self._display_stack)
         
@@ -686,32 +704,59 @@ class MainWindow(QMainWindow):
         index = ['log', 'oscilloscope', 'mixed'].index(new_mode)
         
         if new_mode == 'mixed' and self._current_mode != 'mixed':
-            # 切换到混合模式：将接收区和波形移入mixed_splitter
             self._receive_group.setParent(None)
             self.waveform_widget.setParent(None)
             self._mixed_splitter.addWidget(self._receive_group)
             self._mixed_splitter.addWidget(self.waveform_widget)
             self._mixed_splitter.setSizes([300, 300])
+            if hasattr(self, 'channel_panel'):
+                self.channel_panel.hide()
         elif new_mode == 'log' and self._current_mode == 'mixed':
-            # 从混合模式切回日志模式：将接收区移回log_page
             self._receive_group.setParent(None)
             self.waveform_widget.setParent(None)
             log_layout = self._log_page.layout()
             log_layout.addWidget(self._receive_group)
             osc_layout = self._oscilloscope_page.layout()
-            osc_layout.addWidget(self.waveform_widget)
+            self._rebuild_osc_page()
+            if hasattr(self, 'channel_panel'):
+                self.channel_panel.hide()
         elif new_mode == 'oscilloscope' and self._current_mode == 'mixed':
-            # 从混合模式切到示波器模式
             self._receive_group.setParent(None)
             self.waveform_widget.setParent(None)
             log_layout = self._log_page.layout()
             log_layout.addWidget(self._receive_group)
-            osc_layout = self._oscilloscope_page.layout()
-            osc_layout.addWidget(self.waveform_widget)
+            self._rebuild_osc_page()
+            if hasattr(self, 'channel_panel'):
+                self.channel_panel.show()
+        elif new_mode == 'oscilloscope' and self._current_mode != 'oscilloscope':
+            self._rebuild_osc_page()
+            if hasattr(self, 'channel_panel'):
+                self.channel_panel.show()
+        elif new_mode == 'log' and self._current_mode == 'oscilloscope':
+            if hasattr(self, 'channel_panel'):
+                self.channel_panel.hide()
         
         self._display_stack.setCurrentIndex(index)
         self._current_mode = new_mode
         self.mode_changed.emit(new_mode)
+        if hasattr(self, 'config_service') and self.config_service:
+            self.config_service.set('display_mode', new_mode)
+            self.config_service.save()
+
+    def _rebuild_osc_page(self):
+        osc_layout = self._oscilloscope_page.layout()
+        while osc_layout.count():
+            item = osc_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+        self._osc_splitter = QSplitter(Qt.Horizontal)
+        self._osc_splitter.addWidget(self.waveform_widget)
+        self._osc_splitter.addWidget(self.channel_panel)
+        self._osc_splitter.setStretchFactor(0, 3)
+        self._osc_splitter.setStretchFactor(1, 0)
+        self._osc_splitter.setSizes([700, ChannelPanel.COLLAPSED_WIDTH])
+        osc_layout.addWidget(self._osc_splitter)
 
     def _on_clear_clicked(self):
         """清空按钮点击"""
@@ -1069,6 +1114,39 @@ class MainWindow(QMainWindow):
             count: 发送字节数
         """
         self.tx_label.setText(f"TX: {count}")
+
+    def create_channel_log(self, channel: int, ch_name: str = '', ch_format: str = '', buf_size: int = 0):
+        if channel in self._channel_log_handles:
+            return self._channel_log_handles[channel]
+        try:
+            from ..runtime.path_config import RUNTIME_LOG_DIR
+            import os
+            from datetime import datetime
+            os.makedirs(RUNTIME_LOG_DIR, exist_ok=True)
+            path = os.path.join(RUNTIME_LOG_DIR, f"rtt_data_CH{channel}_{self._log_timestamp}.log")
+            handle = open(path, 'a', encoding='utf-8')
+            handle.write(f"RTT Assistant CH{channel} 数据日志\n")
+            handle.write(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            if ch_name:
+                handle.write(f"通道名: {ch_name}\n")
+            if ch_format:
+                handle.write(f"数据类型: {ch_format}\n")
+            if buf_size > 0:
+                handle.write(f"缓冲区大小: {buf_size} 字节\n")
+            handle.write(f"{'='*60}\n\n")
+            handle.flush()
+            self._channel_log_handles[channel] = handle
+            return handle
+        except Exception:
+            return None
+
+    def restore_display_mode(self):
+        if hasattr(self, 'config_service') and self.config_service:
+            saved = self.config_service.get('display_mode', 'log')
+            if saved in ('log', 'oscilloscope', 'mixed') and saved != self._current_mode:
+                mode_names = {'log': '日志', 'oscilloscope': '示波器', 'mixed': '混合'}
+                self._mode_button.setText(mode_names.get(saved, '模式'))
+                self._apply_mode(saved)
     
     def _on_log_clicked(self):
         """日志按钮点击"""

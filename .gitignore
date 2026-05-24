@@ -26,6 +26,10 @@ config/pyocd_targets.txt
 
 # Logs
 *.log
+log/
+
+# Test cache
+.pytest_cache/
 
 # Doc build artifacts (keep .md source, ignore generated .html)
 doc/*.html

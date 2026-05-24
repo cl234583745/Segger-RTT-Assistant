@@ -1,7 +1,8 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QToolBar, QComboBox,
                               QLabel, QHBoxLayout, QAction, QPushButton,
-                              QSpinBox, QMenu)
+                              QSpinBox, QMenu, QCheckBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QPixmap, QIcon, QColor
 
 try:
     import pyqtgraph as pg
@@ -11,42 +12,32 @@ except ImportError:
     PYQTGRAPH_AVAILABLE = False
 
 from ..processors.waveform_processor import DataFormat
+from .time_base_manager import TimeBaseManager
+from .view_mode_strategy import ViewModeStrategy
+from .free_explore_strategy import FreeExploreViewStrategy
+from .oscilloscope_strategy import OscilloscopeViewStrategy
 
 
-TIME_BASE_STEPS_US = [
-    1, 2, 5,
-    10, 20, 50,
-    100, 200, 500,
-    1000, 2000, 5000,
-    10000, 20000, 50000,
-    100000, 200000, 500000,
-    1000000, 2000000, 5000000,
-    10000000, 20000000, 50000000,
-    100000000, 200000000, 500000000,
-]
-
-
-def _us_to_display(us_val):
-    if us_val < 1000:
-        return f"{us_val} µs/div", us_val
-    elif us_val < 1000000:
-        return f"{us_val / 1000:.3g} ms/div", us_val
-    else:
-        return f"{us_val / 1000000:.3g} s/div", us_val
-
-
-COLOR_SCHEMES = [
-    ("默认", ['#00FF00', '#FF6600', '#00AAFF', '#FF00FF', '#FFFF00', '#00FFFF', '#FF8888', '#88FF88']),
-    ("暖色", ['#FF4444', '#FF8800', '#FFCC00', '#FF6688', '#FFaa66', '#FF4488', '#FF7744', '#FF5599']),
-    ("冷色", ['#00CCFF', '#0088FF', '#00FFCC', '#4488FF', '#66CCFF', '#00AA88', '#3399FF', '#00DDAA']),
-    ("灰阶", ['#FFFFFF', '#CCCCCC', '#999999', '#666666', '#BBBBBB', '#888888', '#AAAAAA', '#777777']),
+DEFAULT_CHANNEL_COLORS = [
+    '#00FF00', '#FF6600', '#00AAFF', '#FF00FF',
+    '#FFFF00', '#00FFFF', '#FF8888', '#88FF88',
+    '#AA88FF', '#FFAA88',
 ]
 
 DRAW_STYLES = ["线条", "点", "线+点", "矩形"]
 
+V_DIV_STEPS = [
+    0.001, 0.002, 0.005,
+    0.01, 0.02, 0.05,
+    0.1, 0.2, 0.5,
+    1, 2, 5,
+    10, 20, 50,
+    100, 200, 500,
+    1000, 2000, 5000,
+]
+
 
 class WaveformWidget(QWidget):
-    """基于 PyQtGraph 的实时波形显示组件。"""
 
     acquisition_start = pyqtSignal()
     acquisition_stop = pyqtSignal()
@@ -54,18 +45,24 @@ class WaveformWidget(QWidget):
     acquisition_resume = pyqtSignal()
     sampling_rate_changed = pyqtSignal(float)
     theme_changed = pyqtSignal(str)
+    view_mode_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         _t0 = __import__('time').perf_counter()
         self._channels = {}
-        self._time_base_idx = 9
+        self._tb_manager = TimeBaseManager(default_idx=9)
         self._trigger_mode = 'auto'
         self._vertical_scale = 'auto'
         self._color_theme = 'dark'
-        self._color_scheme_idx = 0
-        self._draw_style_idx = 0
+        self._channel_colors = {}
+        self._channel_styles = {}
+        self._channel_vdiv = {}
+        self._channel_yoffset = {}
+        self._channel_enabled = {}
         self._last_frequency = {}
+        self._hs_frequencies = {}
+        self._is_high_speed = False
         self._y_range_auto = True
         self._render_paused = False
         self._sampling_interval = 0
@@ -73,6 +70,11 @@ class WaveformWidget(QWidget):
         self._display_timer = QTimer()
         self._display_timer.setInterval(33)
         self._display_timer.timeout.connect(self._flush_display)
+
+        self._view_mode = "oscilloscope"
+        self._osc_strategy = None
+        self._free_strategy = None
+        self._current_strategy = None
 
         if PYQTGRAPH_AVAILABLE:
             self._init_ui()
@@ -87,43 +89,39 @@ class WaveformWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        toolbar = QToolBar()
-        toolbar.setMovable(False)
+        self._toolbar = QToolBar()
+        self._toolbar.setMovable(False)
 
-        self._create_acquisition_buttons(toolbar)
-        toolbar.addSeparator()
+        self._create_acquisition_buttons(self._toolbar)
+        self._toolbar.addSeparator()
 
-        toolbar.addWidget(QLabel(" 时基: "))
+        self._toolbar.addWidget(QLabel(" 视图: "))
+        self._view_mode_combo = QComboBox()
+        self._view_mode_combo.addItems(["自由探索", "示波器"])
+        self._view_mode_combo.setCurrentIndex(1)
+        self._view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
+        self._toolbar.addWidget(self._view_mode_combo)
+
+        self._toolbar.addSeparator()
+
+        self._toolbar.addWidget(QLabel(" 时基: "))
         self._time_base_combo = QComboBox()
-        for us_val in TIME_BASE_STEPS_US:
-            display, _ = _us_to_display(us_val)
+        for us_val in TimeBaseManager.STEPS_US:
+            display = TimeBaseManager.to_display_string(us_val)
             self._time_base_combo.addItem(display, us_val)
-        self._time_base_combo.setCurrentIndex(self._time_base_idx)
+        self._time_base_combo.setCurrentIndex(self._tb_manager.index)
         self._time_base_combo.currentIndexChanged.connect(self._on_time_base_changed)
-        toolbar.addWidget(self._time_base_combo)
+        self._toolbar.addWidget(self._time_base_combo)
 
-        toolbar.addWidget(QLabel(" 触发: "))
+        self._toolbar.addWidget(QLabel(" 触发: "))
         self._trigger_combo = QComboBox()
         self._trigger_combo.addItems(["自动", "正常", "单次"])
         self._trigger_combo.currentIndexChanged.connect(self._on_trigger_changed)
-        toolbar.addWidget(self._trigger_combo)
+        self._toolbar.addWidget(self._trigger_combo)
 
-        toolbar.addWidget(QLabel(" 配色: "))
-        self._color_scheme_combo = QComboBox()
-        for name, _ in COLOR_SCHEMES:
-            self._color_scheme_combo.addItem(name)
-        self._color_scheme_combo.currentIndexChanged.connect(self._on_color_scheme_changed)
-        toolbar.addWidget(self._color_scheme_combo)
+        self._create_sampling_control(self._toolbar)
 
-        toolbar.addWidget(QLabel(" 样式: "))
-        self._draw_style_combo = QComboBox()
-        self._draw_style_combo.addItems(DRAW_STYLES)
-        self._draw_style_combo.currentIndexChanged.connect(self._on_draw_style_changed)
-        toolbar.addWidget(self._draw_style_combo)
-
-        self._create_format_sampling_controls(toolbar)
-
-        layout.addWidget(toolbar)
+        layout.addWidget(self._toolbar)
 
         _pt = __import__('time').perf_counter()
         self._plot_widget = pg.PlotWidget()
@@ -157,71 +155,88 @@ class WaveformWidget(QWidget):
         self._plot_widget.addItem(self._vline, ignoreBounds=True)
         self._plot_widget.addItem(self._hline, ignoreBounds=True)
 
-        self._cursor_label = pg.TextItem(text='', color='y', anchor=(0, 1))
-        self._plot_widget.addItem(self._cursor_label, ignoreBounds=True)
-
         self._proxy = SignalProxy(self._plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse_moved)
 
         layout.addWidget(self._plot_widget)
 
+        self._free_strategy = FreeExploreViewStrategy(self._tb_manager)
+        self._osc_strategy = OscilloscopeViewStrategy(self._tb_manager)
+        self._current_strategy = self._osc_strategy
+        self._current_strategy.activate(self._plot_widget, self._channels)
+
+    def _on_view_mode_changed(self, index):
+        modes = ["free_explore", "oscilloscope"]
+        new_mode = modes[index]
+        if new_mode == self._view_mode:
+            return
+        self._current_strategy.deactivate(self._plot_widget)
+        self._view_mode = new_mode
+        if new_mode == "oscilloscope":
+            self._current_strategy = self._osc_strategy
+        else:
+            self._current_strategy = self._free_strategy
+        self._current_strategy.activate(self._plot_widget, self._channels)
+        self._apply_time_base()
+        self.view_mode_changed.emit(new_mode)
+        if hasattr(self, '_config_service') and self._config_service:
+            self._config_service.set('scope_view_mode', new_mode)
+            self._config_service.save()
+
+    def set_config_service(self, config_service):
+        self._config_service = config_service
+        if config_service:
+            saved = config_service.get('scope_view_mode', 'oscilloscope')
+            if saved in ('free_explore', 'oscilloscope'):
+                idx = 0 if saved == 'free_explore' else 1
+                self._view_mode_combo.setCurrentIndex(idx)
+
+    def set_view_mode(self, mode):
+        if mode == self._view_mode:
+            return
+        idx = 0 if mode == "free_explore" else 1
+        self._view_mode_combo.setCurrentIndex(idx)
+
+    def get_view_mode(self):
+        return self._view_mode
+
     def _on_wheel_event(self, ev):
         ev.accept()
         delta = ev.angleDelta().y()
-        if delta > 0:
-            new_idx = max(self._time_base_idx - 1, 0)
-        elif delta < 0:
-            new_idx = min(self._time_base_idx + 1, len(TIME_BASE_STEPS_US) - 1)
-        else:
-            return
-        if new_idx != self._time_base_idx:
-            self._time_base_idx = new_idx
+        new_idx = self._current_strategy.handle_wheel(
+            self._plot_widget, delta, self._tb_manager.index)
+        if new_idx != self._tb_manager.index:
+            self._tb_manager.index = new_idx
             self._time_base_combo.blockSignals(True)
             self._time_base_combo.setCurrentIndex(new_idx)
             self._time_base_combo.blockSignals(False)
             self._apply_time_base()
 
     def _apply_time_base(self):
-        us_val = TIME_BASE_STEPS_US[self._time_base_idx]
-        x_range = us_val * 10 / 1000000.0
         vr = self._plot_widget.viewRange()
-        x_center = (vr[0][0] + vr[0][1]) / 2.0
-        self._plot_widget.setXRange(x_center - x_range / 2, x_center + x_range / 2, padding=0)
+        center_x = (vr[0][0] + vr[0][1]) / 2.0
+        self._current_strategy.apply_time_base(
+            self._plot_widget, self._tb_manager.current_value(), center_x)
 
     def _on_view_range_changed(self, vb, ranges):
         vr = self._plot_widget.viewRange()
         x_max = vr[0][1]
         y_max = vr[1][1]
+        y_range = vr[1][1] - vr[1][0]
+        ch_idx = 0
         for ch_info in self._channels.values():
             if 'freq_text' in ch_info:
-                ch_info['freq_text'].setPos(x_max, y_max)
+                ch_info['freq_text'].setPos(x_max, y_max - ch_idx * y_range * 0.08)
+                ch_idx += 1
 
     def _on_mouse_moved(self, evt):
         pos = evt[0]
         if self._plot_widget.sceneBoundingRect().contains(pos):
             mouse_point = self._plot_widget.getViewBox().mapSceneToView(pos)
-            x, y = mouse_point.x(), mouse_point.y()
-            self._vline.setPos(x)
-            self._hline.setPos(y)
-            nearest_val = None
-            for ch_info in self._channels.values():
-                curve = ch_info['curve']
-                x_data = curve.xData
-                y_data = curve.yData
-                if x_data is not None and len(x_data) > 0:
-                    idx = int(round(x))
-                    if 0 <= idx < len(y_data):
-                        nearest_val = y_data[idx]
-                        break
-            if nearest_val is not None:
-                self._cursor_label.setText(f"x={x:.0f}  y={nearest_val:.4g}")
-            else:
-                self._cursor_label.setText(f"x={x:.0f}  y={y:.4g}")
-            vr = self._plot_widget.viewRange()
-            self._cursor_label.setPos(vr[0][0], vr[1][0])
+            self._vline.setPos(mouse_point.x())
+            self._hline.setPos(mouse_point.y())
         else:
             self._vline.setVisible(False)
             self._hline.setVisible(False)
-            self._cursor_label.setVisible(False)
 
     def _create_acquisition_buttons(self, toolbar: QToolBar) -> None:
         self._start_stop_btn = QPushButton("开始")
@@ -237,20 +252,7 @@ class WaveformWidget(QWidget):
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         toolbar.addWidget(self._clear_btn)
 
-    def _create_format_sampling_controls(self, toolbar: QToolBar) -> None:
-        toolbar.addSeparator()
-
-        toolbar.addWidget(QLabel(" 格式: "))
-        self._format_label = QLabel("自动识别")
-        self._format_label.setStyleSheet("color: #00AAFF; font-weight: bold;")
-        toolbar.addWidget(self._format_label)
-
-        toolbar.addWidget(QLabel("  MCU缓冲: "))
-        self._mcu_buf_label = QLabel("?")
-        self._mcu_buf_label.setStyleSheet("color: #888888;")
-        self._mcu_buf_label.setToolTip("MCU侧RTT上行缓冲区大小")
-        toolbar.addWidget(self._mcu_buf_label)
-
+    def _create_sampling_control(self, toolbar: QToolBar) -> None:
         toolbar.addSeparator()
 
         toolbar.addWidget(QLabel(" 采样率: "))
@@ -271,15 +273,6 @@ class WaveformWidget(QWidget):
 
     def _on_clear_clicked(self) -> None:
         self.clear_all()
-
-    def set_format_text(self, text: str) -> None:
-        self._format_label.setText(text)
-
-    def set_mcu_buffer_info(self, channel: int, size: int, name: str = ""):
-        txt = f"CH{channel}={size}B" if size > 0 else "?"
-        self._mcu_buf_label.setText(txt)
-        if name:
-            self._mcu_buf_label.setToolTip(f"CH{channel}: \"{name}\" 大小={size}B")
 
     def _on_sampling_rate_changed(self, value: int) -> None:
         if value > 0:
@@ -302,25 +295,45 @@ class WaveformWidget(QWidget):
             self._pause_btn.setText("暂停")
             self._display_timer.stop()
             self._pending_data.clear()
+            self._current_strategy.set_drag_enabled(
+                self._plot_widget, x_enabled=True, y_enabled=False)
         elif state == 'running':
             self._start_stop_btn.setEnabled(True)
             self._start_stop_btn.setText("停止")
             self._pause_btn.setEnabled(True)
             self._pause_btn.setText("暂停")
             self._display_timer.start()
+            self._current_strategy.set_drag_enabled(
+                self._plot_widget, x_enabled=False, y_enabled=False)
         elif state == 'paused':
             self._start_stop_btn.setEnabled(True)
             self._start_stop_btn.setText("停止")
             self._pause_btn.setEnabled(True)
             self._pause_btn.setText("恢复")
             self._display_timer.stop()
+            self._current_strategy.set_drag_enabled(
+                self._plot_widget, x_enabled=True, y_enabled=False)
 
     def _get_channel_color(self, channel: int) -> str:
-        _, colors = COLOR_SCHEMES[self._color_scheme_idx]
-        return colors[channel % len(colors)]
+        if channel in self._channel_colors:
+            return self._channel_colors[channel]
+        default = DEFAULT_CHANNEL_COLORS[(channel - 1) % len(DEFAULT_CHANNEL_COLORS)]
+        self._channel_colors[channel] = default
+        return default
 
-    def _get_draw_kwargs(self, color: str) -> dict:
-        style = self._draw_style_idx
+    def _get_channel_style(self, channel: int) -> int:
+        return self._channel_styles.get(channel, 0)
+
+    def _get_channel_vdiv(self, channel: int) -> float:
+        return self._channel_vdiv.get(channel, 1.0)
+
+    def _get_channel_yoffset(self, channel: int) -> float:
+        return self._channel_yoffset.get(channel, 0.0)
+
+    def _get_channel_enabled(self, channel: int) -> bool:
+        return self._channel_enabled.get(channel, True)
+
+    def _get_draw_kwargs(self, color: str, style: int) -> dict:
         kwargs = {}
         if style == 0:
             kwargs['pen'] = pg.mkPen(color, width=2)
@@ -350,12 +363,15 @@ class WaveformWidget(QWidget):
         if name is None:
             name = f"CH{channel}"
         color = self._get_channel_color(channel)
-        draw_kwargs = self._get_draw_kwargs(color)
+        style = self._get_channel_style(channel)
+        draw_kwargs = self._get_draw_kwargs(color, style)
         curve = self._plot_widget.plot(name=name, **draw_kwargs)
 
-        vr = self._plot_widget.viewRange()
         freq_text = pg.TextItem(text='', color=color, anchor=(1, 0))
-        freq_text.setPos(vr[0][1], vr[1][1])
+        vr = self._plot_widget.viewRange()
+        y_range = vr[1][1] - vr[1][0] if vr[1][1] != vr[1][0] else 1.0
+        ch_idx = len(self._channels)
+        freq_text.setPos(vr[0][1], vr[1][1] - ch_idx * y_range * 0.08)
         self._plot_widget.addItem(freq_text)
 
         curve.setDownsampling(ds=True, auto=True, method='peak')
@@ -364,22 +380,41 @@ class WaveformWidget(QWidget):
             'curve': curve,
             'name': name,
             'color': color,
+            'style': style,
+            'vdiv': self._get_channel_vdiv(channel),
+            'yoffset': self._get_channel_yoffset(channel),
+            'enabled': self._get_channel_enabled(channel),
             'freq_text': freq_text,
+            'has_data': False,
         }
 
-    def _redraw_all_channels(self):
-        for ch, ch_info in list(self._channels.items()):
-            curve = ch_info['curve']
-            x_data = curve.xData
-            y_data = curve.yData
-            color = self._get_channel_color(ch)
-            draw_kwargs = self._get_draw_kwargs(color)
-            self._plot_widget.removeItem(curve)
-            new_curve = self._plot_widget.plot(name=ch_info['name'], **draw_kwargs)
-            if x_data is not None and y_data is not None:
+    def _redraw_channel(self, channel: int):
+        ch_info = self._channels[channel]
+        old_curve = ch_info['curve']
+        x_data = old_curve.xData
+        y_data = old_curve.yData
+        color = ch_info['color']
+        style = ch_info['style']
+        draw_kwargs = self._get_draw_kwargs(color, style)
+        self._plot_widget.removeItem(old_curve)
+        new_curve = self._plot_widget.plot(name=ch_info['name'], **draw_kwargs)
+        new_curve.setDownsampling(ds=True, auto=True, method='peak')
+        if x_data is not None and y_data is not None and ch_info['has_data']:
+            vdiv = ch_info['vdiv']
+            yoffset = ch_info['yoffset']
+            if vdiv != 1.0 or yoffset != 0.0:
+                scaled_y = [(v - yoffset) / vdiv for v in y_data]
+                new_curve.setData(x_data, scaled_y)
+            else:
                 new_curve.setData(x_data, y_data)
-            ch_info['curve'] = new_curve
-            ch_info['color'] = color
+        ch_info['curve'] = new_curve
+        new_curve.setVisible(ch_info['enabled'])
+        if 'freq_text' in ch_info:
+            ch_info['freq_text'].setColor(color)
+
+    def _redraw_all_channels(self):
+        for ch in list(self._channels.keys()):
+            self._redraw_channel(ch)
 
     def remove_channel(self, channel: int):
         if not PYQTGRAPH_AVAILABLE:
@@ -399,18 +434,40 @@ class WaveformWidget(QWidget):
             logging.getLogger(__name__).info(f"自动添加示波器通道 CH{channel}")
         if not timestamps or not values:
             return
-
         self._pending_data[channel] = (timestamps, values)
+
+    def update_frequency(self, channel: int, frequency: float):
+        self._hs_frequencies[channel] = frequency
+
+    def set_high_speed_mode(self, enabled: bool):
+        self._is_high_speed = enabled
+        if not enabled:
+            self._hs_frequencies.clear()
 
     def _flush_display(self):
         if not self._pending_data:
             return
+        import time
+        t0 = time.perf_counter()
+        ch_count = 0
         for channel, (timestamps, values) in self._pending_data.items():
             if channel not in self._channels:
                 continue
-            self._channels[channel]['curve'].setData(timestamps, values)
+            ch_info = self._channels[channel]
+            ch_info['has_data'] = True
+            ch_count += 1
 
-            if self._y_range_auto and values:
+            vdiv = ch_info['vdiv']
+            yoffset = ch_info['yoffset']
+            if vdiv != 1.0 or yoffset != 0.0:
+                scaled_values = [(v - yoffset) / vdiv for v in values]
+                ch_info['curve'].setData(timestamps, scaled_values)
+            else:
+                ch_info['curve'].setData(timestamps, values)
+
+            ch_info['curve'].setVisible(ch_info['enabled'])
+
+            if self._y_range_auto and values and self._view_mode != "oscilloscope":
                 vmin = min(values)
                 vmax = max(values)
                 margin = max(abs(vmax - vmin) * 0.1, 0.001)
@@ -419,26 +476,83 @@ class WaveformWidget(QWidget):
             if not self._render_paused and len(timestamps) > 1:
                 x_max = timestamps[-1]
                 x_min = timestamps[0]
-                us_val = TIME_BASE_STEPS_US[self._time_base_idx]
-                x_range_seconds = us_val * 10 / 1000000.0
-                span = x_max - x_min
-                if span <= 0:
-                    span = x_range_seconds
-                x_view_start = max(x_min, x_max - x_range_seconds)
-                self._plot_widget.setXRange(x_view_start, x_max, padding=0)
+                vr = self._plot_widget.viewRange()
+                self._current_strategy.update_view_range(
+                    self._plot_widget, x_min, x_max,
+                    vr[1][0], vr[1][1])
 
-            if len(values) >= 3:
-                frequency = self._calculate_frequency(timestamps, values)
+            if len(values) >= 3 and ch_info['enabled']:
+                if self._is_high_speed and channel in self._hs_frequencies:
+                    frequency = self._hs_frequencies[channel]
+                else:
+                    frequency = self._calculate_frequency(timestamps, values)
                 if frequency is not None and frequency > 0:
                     self._last_frequency[channel] = frequency
-                    if 'freq_text' in self._channels[channel]:
+                    if 'freq_text' in ch_info:
                         if frequency < 1000:
                             freq_str = f"{frequency:.1f} Hz"
                         else:
                             freq_str = f"{frequency/1000:.2f} kHz"
                         period = 1.0 / frequency * 1000
-                        self._channels[channel]['freq_text'].setText(f"{freq_str}\nT={period:.3f}ms")
+                        ch_name = ch_info['name']
+                        ch_info['freq_text'].setText(f"{ch_name}: {freq_str}\nT={period:.3f}ms")
+                        ch_info['freq_text'].setVisible(True)
+                else:
+                    if 'freq_text' in ch_info:
+                        ch_info['freq_text'].setVisible(False)
+            else:
+                if 'freq_text' in ch_info:
+                    ch_info['freq_text'].setVisible(False)
+
         self._pending_data.clear()
+
+        elapsed = (time.perf_counter() - t0) * 1000
+        if not hasattr(self, '_flush_log_counter'):
+            self._flush_log_counter = 0
+        self._flush_log_counter += 1
+        if self._flush_log_counter <= 5 or self._flush_log_counter % 200 == 0:
+            import logging
+            logging.getLogger(__name__).info(
+                f"[flush] #{self._flush_log_counter} ch_count={ch_count} elapsed={elapsed:.1f}ms")
+
+        if self._view_mode == "oscilloscope":
+            self._auto_y_range_multi_channel()
+            if self._current_strategy and self._current_strategy._grid_item:
+                self._sync_y_grid_ticks()
+
+    def _auto_y_range_multi_channel(self):
+        if not self._y_range_auto:
+            return
+        all_min = None
+        all_max = None
+        for ch_info in self._channels.values():
+            if not ch_info['enabled'] or not ch_info.get('has_data'):
+                continue
+            curve = ch_info['curve']
+            y_data = curve.yData
+            if y_data is not None and len(y_data) > 0:
+                ch_min = float(min(y_data))
+                ch_max = float(max(y_data))
+                if all_min is None or ch_min < all_min:
+                    all_min = ch_min
+                if all_max is None or ch_max > all_max:
+                    all_max = ch_max
+        if all_min is not None and all_max is not None:
+            margin = max(abs(all_max - all_min) * 0.1, 0.001)
+            self._plot_widget.setYRange(all_min - margin, all_max + margin)
+
+    def _sync_y_grid_ticks(self):
+        y_axis = self._plot_widget.getAxis('left')
+        try:
+            vr = self._plot_widget.viewRange()
+            ticks = y_axis.tickValues(vr[1][0], vr[1][1], self._plot_widget.getViewBox().height())
+            if ticks:
+                for spacing, values in ticks:
+                    if len(values) >= 2 and spacing > 0:
+                        self._current_strategy._grid_item.set_y_tick_spacing(spacing)
+                        return
+        except Exception:
+            pass
 
     def _calculate_frequency(self, timestamps: list, values: list) -> float:
         if len(values) < 10:
@@ -461,14 +575,15 @@ class WaveformWidget(QWidget):
 
     def set_time_base(self, us_per_div: int):
         idx = None
-        for i, v in enumerate(TIME_BASE_STEPS_US):
+        for i, v in enumerate(TimeBaseManager.STEPS_US):
             if v == us_per_div:
                 idx = i
                 break
         if idx is None:
-            closest = min(range(len(TIME_BASE_STEPS_US)), key=lambda i: abs(TIME_BASE_STEPS_US[i] - us_per_div))
+            closest = min(range(len(TimeBaseManager.STEPS_US)),
+                          key=lambda i: abs(TimeBaseManager.STEPS_US[i] - us_per_div))
             idx = closest
-        self._time_base_idx = idx
+        self._tb_manager.index = idx
         self._time_base_combo.blockSignals(True)
         self._time_base_combo.setCurrentIndex(idx)
         self._time_base_combo.blockSignals(False)
@@ -502,7 +617,7 @@ class WaveformWidget(QWidget):
         self._pending_data.clear()
 
     def _on_time_base_changed(self, index):
-        self._time_base_idx = index
+        self._tb_manager.index = index
         self._apply_time_base()
 
     def _on_trigger_changed(self, index):
@@ -510,15 +625,39 @@ class WaveformWidget(QWidget):
         if 0 <= index < len(modes):
             self._trigger_mode = modes[index]
 
-    def _on_color_scheme_changed(self, index):
-        self._color_scheme_idx = index
-        self._redraw_all_channels()
+    def set_channel_color(self, channel: int, color: str) -> None:
+        if channel not in self._channels:
+            return
+        self._channels[channel]['color'] = color
+        self._channel_colors[channel] = color
+        self._redraw_channel(channel)
 
-    def _on_draw_style_changed(self, index):
-        self._draw_style_idx = index
-        self._redraw_all_channels()
+    def set_channel_style(self, channel: int, style: int) -> None:
+        if channel not in self._channels:
+            return
+        self._channels[channel]['style'] = style
+        self._channel_styles[channel] = style
+        self._redraw_channel(channel)
 
-    def _on_scale_changed(self, index):
-        modes = ['auto', 'manual']
-        if 0 <= index < len(modes):
-            self.set_vertical_scale(modes[index])
+    def set_channel_vdiv(self, channel: int, vdiv: float) -> None:
+        if vdiv <= 0:
+            return
+        if channel not in self._channels:
+            return
+        self._channels[channel]['vdiv'] = vdiv
+        self._channel_vdiv[channel] = vdiv
+        self._redraw_channel(channel)
+
+    def set_channel_yoffset(self, channel: int, yoffset: float) -> None:
+        if channel not in self._channels:
+            return
+        self._channels[channel]['yoffset'] = yoffset
+        self._channel_yoffset[channel] = yoffset
+        self._redraw_channel(channel)
+
+    def set_channel_enabled(self, channel: int, enabled: bool) -> None:
+        if channel not in self._channels:
+            return
+        self._channels[channel]['enabled'] = enabled
+        self._channel_enabled[channel] = enabled
+        self._channels[channel]['curve'].setVisible(enabled)

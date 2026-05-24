@@ -66,6 +66,17 @@ class JLinkBackend(DebuggerBackend):
             raise RuntimeError("J-Link 未连接")
         return self._wrapper.read_rtt(buffer_size=buffer_size, channel=channel)
 
+    def rtt_read_all(self, channels: list, buffer_size: int = 1024) -> dict:
+        if self._wrapper is None:
+            raise RuntimeError("J-Link 未连接")
+        result = {}
+        for channel in channels:
+            try:
+                result[channel] = self._wrapper.read_rtt(buffer_size=buffer_size, channel=channel)
+            except Exception:
+                result[channel] = b''
+        return result
+
     def rtt_write(self, channel: int, data: bytes) -> int:
         if self._wrapper is None:
             raise RuntimeError("J-Link 未连接")

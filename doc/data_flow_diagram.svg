@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 700" font-family="Consolas, monospace">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4A90D9"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#E74C3C"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#27AE60"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#F39C12"/>
+    </marker>
+  </defs>
+  
+  <rect width="960" height="700" fill="#1a1a2e" rx="8"/>
+  
+  <text x="480" y="30" text-anchor="middle" fill="#E0E0E0" font-size="16" font-weight="bold">RTT-Assistant 数据接收与多通道显示流程 (修复后)</text>
+  
+  <!-- MCU -->
+  <rect x="30" y="55" width="150" height="90" rx="6" fill="#2d2d44" stroke="#E74C3C" stroke-width="2"/>
+  <text x="105" y="78" text-anchor="middle" fill="#E74C3C" font-size="12" font-weight="bold">MCU (Timer 1kHz)</text>
+  <text x="105" y="98" text-anchor="middle" fill="#5DADE2" font-size="10">CH1: RTT_Write(1, u4)</text>
+  <text x="105" y="115" text-anchor="middle" fill="#58D68D" font-size="10">CH2: RTT_Write(2, u1)</text>
+  <text x="105" y="132" text-anchor="middle" fill="#888" font-size="9">同一定时器, 严格对齐</text>
+  
+  <!-- RTT CB -->
+  <rect x="240" y="55" width="150" height="90" rx="6" fill="#2d2d44" stroke="#F39C12" stroke-width="2"/>
+  <text x="315" y="78" text-anchor="middle" fill="#F39C12" font-size="12" font-weight="bold">RTT Control Block</text>
+  <text x="315" y="98" text-anchor="middle" fill="#888" font-size="10">Up[0]: Terminal</text>
+  <text x="315" y="115" text-anchor="middle" fill="#5DADE2" font-size="10">Up[1]: JScope_u4 (512B)</text>
+  <text x="315" y="132" text-anchor="middle" fill="#58D68D" font-size="10">Up[2]: JScope_u1 (256B)</text>
+  
+  <line x1="180" y1="100" x2="240" y2="100" stroke="#E74C3C" stroke-width="2" marker-end="url(#arrowRed)"/>
+  
+  <!-- DataReceiveThread -->
+  <rect x="460" y="45" width="210" height="115" rx="6" fill="#2d2d44" stroke="#4A90D9" stroke-width="2"/>
+  <text x="565" y="68" text-anchor="middle" fill="#4A90D9" font-size="12" font-weight="bold">DataReceiveThread</text>
+  <text x="565" y="88" text-anchor="middle" fill="#F39C12" font-size="10" font-weight="bold">1. poll_time = perf_counter()</text>
+  <text x="565" y="105" text-anchor="middle" fill="#27AE60" font-size="10" font-weight="bold">2. rtt_read_all([0,1,2])</text>
+  <text x="565" y="120" text-anchor="middle" fill="#888" font-size="9">   ↓ 1次 _poll_rtt_control_block</text>
+  <text x="565" y="135" text-anchor="middle" fill="#888" font-size="9">   ↓ for ch: refresh + read</text>
+  <text x="565" y="150" text-anchor="middle" fill="#27AE60" font-size="10" font-weight="bold">3. batch_received.emit(poll_time)</text>
+  
+  <line x1="390" y1="100" x2="460" y2="100" stroke="#4A90D9" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="425" y="93" text-anchor="middle" fill="#27AE60" font-size="9" font-weight="bold">1次poll!</text>
+  
+  <!-- Key Fix Highlight -->
+  <rect x="463" y="95" width="205" height="60" rx="3" fill="none" stroke="#27AE60" stroke-width="1.5" stroke-dasharray="4,3"/>
+  
+  <!-- MainController -->
+  <rect x="460" y="210" width="210" height="55" rx="6" fill="#2d2d44" stroke="#9B59B6" stroke-width="2"/>
+  <text x="565" y="232" text-anchor="middle" fill="#9B59B6" font-size="12" font-weight="bold">MainController</text>
+  <text x="565" y="252" text-anchor="middle" fill="#AAA" font-size="10">_on_batch_received → process_batch</text>
+  
+  <line x1="565" y1="160" x2="565" y2="210" stroke="#4A90D9" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="595" y="188" fill="#888" font-size="9">batch signal</text>
+  
+  <!-- WaveformProcessor -->
+  <rect x="240" y="210" width="180" height="115" rx="6" fill="#2d2d44" stroke="#27AE60" stroke-width="2"/>
+  <text x="330" y="232" text-anchor="middle" fill="#27AE60" font-size="12" font-weight="bold">WaveformProcessor</text>
+  <text x="330" y="252" text-anchor="middle" fill="#AAA" font-size="10">process_batch(poll_time, batch)</text>
+  <text x="330" y="270" text-anchor="middle" fill="#AAA" font-size="10">for (ch, data) in batch:</text>
+  <text x="330" y="288" text-anchor="middle" fill="#F39C12" font-size="10" font-weight="bold">  values = _parse_channel(ch, data)</text>
+  <text x="330" y="306" text-anchor="middle" fill="#F39C12" font-size="10" font-weight="bold">  ts = counter[ch] × Δt</text>
+  <text x="330" y="318" text-anchor="middle" fill="#888" font-size="9">  buffer[ch].append(v)</text>
+  
+  <line x1="460" y1="238" x2="420" y2="260" stroke="#27AE60" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  
+  <!-- WaveformWidget -->
+  <rect x="240" y="380" width="450" height="100" rx="6" fill="#2d2d44" stroke="#5DADE2" stroke-width="2"/>
+  <text x="465" y="403" text-anchor="middle" fill="#5DADE2" font-size="12" font-weight="bold">WaveformWidget (pyqtgraph PlotWidget)</text>
+  <text x="340" y="425" text-anchor="middle" fill="#5DADE2" font-size="10">CH1: PlotCurveItem</text>
+  <text x="340" y="445" text-anchor="middle" fill="#AAA" font-size="9">curve1.setData(ts1[], val1[])</text>
+  <text x="340" y="465" text-anchor="middle" fill="#AAA" font-size="9">独立时间轴 + 独立数据</text>
+  <text x="600" y="425" text-anchor="middle" fill="#58D68D" font-size="10">CH2: PlotCurveItem</text>
+  <text x="600" y="445" text-anchor="middle" fill="#AAA" font-size="9">curve2.setData(ts2[], val2[])</text>
+  <text x="600" y="465" text-anchor="middle" fill="#AAA" font-size="9">独立时间轴 + 独立数据</text>
+  
+  <path d="M330 325 L330 380" stroke="#5DADE2" stroke-width="2" marker-end="url(#arrow)" fill="none"/>
+  <text x="345" y="358" fill="#888" font-size="9">waveform_updated</text>
+  
+  <!-- Log Points -->
+  <rect x="30" y="380" width="180" height="180" rx="6" fill="#1d1d30" stroke="#F39C12" stroke-width="2"/>
+  <text x="120" y="403" text-anchor="middle" fill="#F39C12" font-size="12" font-weight="bold">关键日志时间点</text>
+  <text x="120" y="425" text-anchor="middle" fill="#4A90D9" font-size="9">[DRT batch] poll时刻</text>
+  <text x="120" y="440" text-anchor="middle" fill="#888" font-size="9">  CH1:124B, CH2:31B</text>
+  <text x="120" y="458" text-anchor="middle" fill="#27AE60" font-size="9">[batch] poll_offset, est_dt</text>
+  <text x="120" y="473" text-anchor="middle" fill="#888" font-size="9">  buffer长度, 耗时</text>
+  <text x="120" y="491" text-anchor="middle" fill="#5DADE2" font-size="9">[flush] ch_count, elapsed</text>
+  <text x="120" y="506" text-anchor="middle" fill="#888" font-size="9">  setData到pyqtgraph耗时</text>
+  <text x="120" y="528" text-anchor="middle" fill="#AAA" font-size="8">日志频率: 前5次每次+之后每100/200次</text>
+  <text x="120" y="543" text-anchor="middle" fill="#AAA" font-size="8">写入rtt_debug.log (Python logging)</text>
+  
+  <!-- Fix Summary -->
+  <rect x="720" y="210" width="220" height="180" rx="6" fill="#1a2d1a" stroke="#27AE60" stroke-width="2"/>
+  <text x="830" y="233" text-anchor="middle" fill="#27AE60" font-size="12" font-weight="bold">修复总结</text>
+  <text x="830" y="255" text-anchor="middle" fill="#E74C3C" font-size="9">❌ 之前: for循环每次rtt_read</text>
+  <text x="830" y="270" text-anchor="middle" fill="#E74C3C" font-size="9">   → 多次poll控制块</text>
+  <text x="830" y="285" text-anchor="middle" fill="#E74C3C" font-size="9">   → CH1/CH2不同时刻快照</text>
+  <text x="830" y="305" text-anchor="middle" fill="#27AE60" font-size="9">✅ 现在: rtt_read_all一次poll</text>
+  <text x="830" y="320" text-anchor="middle" fill="#27AE60" font-size="9">   → 同一时刻所有通道快照</text>
+  <text x="830" y="335" text-anchor="middle" fill="#27AE60" font-size="9">   → batch信号共享poll_time</text>
+  <text x="830" y="355" text-anchor="middle" fill="#27AE60" font-size="9">✅ 时间戳: counter[ch] × Δt</text>
+  <text x="830" y="370" text-anchor="middle" fill="#888" font-size="9">   保证连续, 无间隙/重叠</text>
+  <text x="830" y="385" text-anchor="middle" fill="#888" font-size="9">   一次poll保证对齐</text>
+  
+  <!-- Timeline -->
+  <rect x="30" y="600" width="900" height="90" rx="6" fill="#1d1d30" stroke="#333" stroke-width="1"/>
+  <text x="480" y="622" text-anchor="middle" fill="#E0E0E0" font-size="11" font-weight="bold">时间轴示意 (rtt_read_all 一次poll)</text>
+  
+  <text x="60" y="648" fill="#AAA" font-size="10">MCU:</text>
+  <g fill="#5DADE2">
+    <circle cx="120" cy="644" r="3"/><circle cx="130" cy="644" r="3"/><circle cx="140" cy="644" r="3"/>
+    <circle cx="150" cy="644" r="3"/><circle cx="160" cy="644" r="3"/>
+  </g>
+  <g fill="#58D68D">
+    <circle cx="122" cy="653" r="3"/><circle cx="132" cy="653" r="3"/><circle cx="142" cy="653" r="3"/>
+    <circle cx="152" cy="653" r="3"/><circle cx="162" cy="653" r="3"/>
+  </g>
+  <text x="500" y="648" fill="#5DADE2" font-size="9">CH1采样点</text>
+  <text x="500" y="657" fill="#58D68D" font-size="9">CH2采样点 (严格对齐)</text>
+  
+  <text x="60" y="680" fill="#AAA" font-size="10">PC:</text>
+  <text x="100" y="680" fill="#27AE60" font-size="9" font-weight="bold">rtt_read_all → 1次poll</text>
+  <text x="290" y="680" fill="#F39C12" font-size="9">CH1: 5个值, CH2: 5个值</text>
+  <text x="480" y="680" fill="#27AE60" font-size="9" font-weight="bold">✅ 同一时刻快照!</text>
+  <text x="630" y="680" fill="#AAA" font-size="9">counter1 += 5, counter2 += 5</text>
+</svg>

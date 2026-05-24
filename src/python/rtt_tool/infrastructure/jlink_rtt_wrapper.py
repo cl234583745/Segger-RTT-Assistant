@@ -222,7 +222,18 @@ class JLinkRTTWrapper:
             elif ip_address:
                 self.jlink.open(ip_addr=ip_address)
             else:
+                try:
+                    num_connected = self.jlink.num_connected_emulators()
+                except Exception:
+                    num_connected = 0
+                if num_connected == 0:
+                    raise RuntimeError("未检测到J-Link探针，请先连接探针并在配置页面刷新探针列表")
                 self.jlink.open()
+            
+            try:
+                self.jlink.disable_dialog_boxes()
+            except Exception:
+                pass
             
             if interface.upper() == "SWD":
                 self.jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)

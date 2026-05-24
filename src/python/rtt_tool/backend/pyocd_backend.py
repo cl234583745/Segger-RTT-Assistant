@@ -454,38 +454,26 @@ class PyOCDBackend(DebuggerBackend):
         except Exception as e:
             self._rtt_cb = None
             self._diag_log(f'init_rtt: FAILED: {type(e).__name__}: {e}')
-            raise RuntimeError(f"RTT 初始化失败: {e}")
+            err_str = str(e)
+            if 'pop from an empty deque' in err_str:
+                hint = ' - RTT控制块读取异常，请确认MCU固件已调用SEGGER_RTT_Init()后重试连接'
+            elif type(e).__name__ == 'AssertionError':
+                hint = ' - PyOCD内部断言失败，请重试连接'
+            else:
+                hint = ''
+            raise RuntimeError(f"RTT 初始化失败: {e}{hint}")
 
     def _poll_rtt_control_block(self):
-        """手动轮询 RTT 控制块，强制刷新通道缓冲区。
-
-        PyOCD 新版 RTTControlBlock 的后台线程可能存在与 DAPLink
-        (CMSIS-DAP HID) 的兼容性问题，导致缓冲区不被更新。
-        此方法在每次读取前强制触发一次轮询。
-        """
         cb = self._rtt_cb
         if cb is None:
             return
-        # 尝试各种已知的轮询方法名
         for poll_name in ('poll', '_poll', '_read_all_channels', '_poll_channels'):
             if hasattr(cb, poll_name):
                 try:
                     getattr(cb, poll_name)()
-                except Exception as e:
-                    self._diag_log(f'_poll_rtt: {poll_name}() FAILED: {type(e).__name__}: {e}')
+                except Exception:
+                    pass
                 break
-        # 也尝试直接更新每个通道
-        for i, ch in enumerate(cb.up_channels):
-            if hasattr(ch, '_read_from_target'):
-                try:
-                    ch._read_from_target()
-                except Exception as e:
-                    self._diag_log(f'_poll_rtt: UpCh[{i}]._read_from_target() FAILED: {type(e).__name__}: {e}')
-            elif hasattr(ch, 'update'):
-                try:
-                    ch.update()
-                except Exception as e:
-                    self._diag_log(f'_poll_rtt: UpCh[{i}].update() FAILED: {type(e).__name__}: {e}')
 
     def _read_upchannel(self, ch, channel: int, buffer_size: int) -> bytes:
         """读取上行通道数据，兼容不同 PyOCD 版本的 read() 签名。"""
@@ -518,12 +506,54 @@ class PyOCDBackend(DebuggerBackend):
         try:
             if channel >= len(self._rtt_cb.up_channels):
                 return b''
+            ch = self._rtt_cb.up_channels[channel]
             self._poll_rtt_control_block()
-            return self._read_upchannel(self._rtt_cb.up_channels[channel], channel, buffer_size)
+            self._force_refresh_channel(ch)
+            return self._read_upchannel(ch, channel, buffer_size)
         except Exception as e:
             self._log('warning', f'PyOCD RTT读取通道{channel}失败: {e}')
             self._diag_log(f'rtt_read(ch={channel}, buf={buffer_size}) FAILED: {type(e).__name__}: {e}')
             return b''
+
+    def rtt_read_all(self, channels: list, buffer_size: int = 1024) -> dict:
+        """一次poll控制块，批量读取多个通道数据。返回 {channel: bytes}。"""
+        if not self._rtt_initialized or self._rtt_cb is None:
+            raise RuntimeError("RTT 未初始化")
+        result = {}
+        try:
+            self._poll_rtt_control_block()
+        except Exception:
+            pass
+        for channel in channels:
+            try:
+                if channel >= len(self._rtt_cb.up_channels):
+                    continue
+                ch = self._rtt_cb.up_channels[channel]
+                self._force_refresh_channel(ch)
+                data = self._read_upchannel(ch, channel, buffer_size)
+                result[channel] = data
+            except Exception as e:
+                self._log('warning', f'PyOCD RTT批量读取通道{channel}失败: {e}')
+                result[channel] = b''
+        return result
+
+    def _force_refresh_channel(self, ch):
+        for attr in ('_WrOff', '_RdOff', '_wr_off', '_rd_off'):
+            if hasattr(ch, attr):
+                try:
+                    setattr(ch, attr, None)
+                except Exception:
+                    pass
+        if hasattr(ch, '_read_from_target'):
+            try:
+                ch._read_from_target()
+            except Exception:
+                pass
+        elif hasattr(ch, 'update'):
+            try:
+                ch.update()
+            except Exception:
+                pass
 
     def rtt_write(self, channel: int, data: bytes) -> int:
         if not self._rtt_initialized or self._rtt_cb is None:
