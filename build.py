@@ -163,6 +163,12 @@ def build():
             shutil.rmtree(venv_dst)
 
         _CRITICAL_VENV_PACKAGES = ['pyocd', 'usb', 'usb1']
+        _EXCLUDED_VENV_PACKAGES = [
+            'PyQt5', 'PyQt5-*', 'pyqt5_*', 'pyqtgraph', 'pyqtgraph-*',
+            'numpy', 'numpy-*', 'numpy.libs',
+        ]
+
+        _excluded_patterns = ['*.pyc', '__pycache__'] + _EXCLUDED_VENV_PACKAGES
 
         def _copy_venv_with_retry(src, dst, max_retries=3):
             import stat
@@ -172,7 +178,7 @@ def build():
                         os.chmod(path, stat.S_IWRITE), func(path)
                     ) if isinstance(exc_info[1], PermissionError) else None)
                 try:
-                    shutil.copytree(src, dst, ignore=shutil.ignore_patterns('*.pyc', '__pycache__'))
+                    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*_excluded_patterns))
                 except Exception as e:
                     print(f"    第{attempt}次复制失败: {e}")
                     if attempt < max_retries:
@@ -206,6 +212,49 @@ def build():
         src_count = sum(1 for _ in os.walk(os.path.join(venv_src, 'Lib', 'site-packages')))
         dst_count = sum(1 for _ in os.walk(os.path.join(venv_dst, 'Lib', 'site-packages')))
         print(f"  已复制 runtime/venv/ ({size_mb / 1024 / 1024:.0f}MB, site-packages: {dst_count}/{src_count} 目录)")
+
+        # Fix shebang lines in venv Scripts (intelhex etc.)
+        scripts_dst = os.path.join(venv_dst, 'Scripts')
+        if os.path.isdir(scripts_dst):
+            fixed = 0
+            for f in os.listdir(scripts_dst):
+                if f.endswith('.py'):
+                    fp = os.path.join(scripts_dst, f)
+                    try:
+                        with open(fp, 'r', encoding='utf-8') as fh:
+                            first_line = fh.readline()
+                        if first_line.startswith('#!') and 'venv' in first_line:
+                            with open(fp, 'r', encoding='utf-8') as fh:
+                                rest = fh.read()
+                            with open(fp, 'w', encoding='utf-8') as fh:
+                                fh.write('#!/usr/bin/env python3\n')
+                                fh.write(rest)
+                            fixed += 1
+                    except Exception:
+                        pass
+            if fixed:
+                print(f"  已修复 {fixed} 个 venv Scripts 的 shebang 路径")
+
+        # Fix pyvenv.cfg in venv
+        pyvenv_cfg = os.path.join(venv_dst, 'pyvenv.cfg')
+        if os.path.isfile(pyvenv_cfg):
+            try:
+                with open(pyvenv_cfg, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                version_line = ''
+                for line in lines:
+                    if line.strip().startswith('version ='):
+                        version_line = line if line.endswith('\n') else line + '\n'
+                with open(pyvenv_cfg, 'w', encoding='utf-8') as f:
+                    f.write(f'home = {os.path.dirname(sys.executable)}\n')
+                    f.write('include-system-site-packages = false\n')
+                    if version_line:
+                        f.write(version_line)
+                    f.write(f'executable = {sys.executable}\n')
+                    f.write(f'command = {sys.executable} -m venv {venv_dst}\n')
+                print(f"  已修复 venv/pyvenv.cfg 路径")
+            except Exception as e:
+                print(f"  修复 pyvenv.cfg 失败: {e}")
     else:
         print(f"  注意: runtime/venv/ 不存在，用户需自行安装Python依赖")
 
@@ -220,6 +269,19 @@ def build():
             if f.endswith('.dll'):
                 shutil.copy2(os.path.join(dll_src, f), os.path.join(runtime_dst, 'dll', f))
                 print(f"  已复制 runtime/dll/{f}")
+
+    # Copy runtime/cpm_cache/ (index.json + aliases.json for Pack search)
+    cpm_src = os.path.join(runtime_src, 'cpm_cache')
+    cpm_dst = os.path.join(runtime_dst, 'cpm_cache')
+    if os.path.isdir(cpm_src):
+        os.makedirs(cpm_dst, exist_ok=True)
+        for f in ['index.json', 'aliases.json']:
+            src_f = os.path.join(cpm_src, f)
+            if os.path.isfile(src_f):
+                shutil.copy2(src_f, os.path.join(cpm_dst, f))
+        copied = [f for f in ['index.json', 'aliases.json'] if os.path.isfile(os.path.join(cpm_dst, f))]
+        if copied:
+            print(f"  已复制 runtime/cpm_cache/ ({', '.join(copied)})")
 
     print(f"\n打包完成! 输出: {dist_dir}")
     print(f"\n分发时复制整个 {os.path.basename(dist_dir)} 文件夹到目标电脑即可运行")

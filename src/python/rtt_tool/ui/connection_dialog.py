@@ -21,6 +21,7 @@
 类似JLinkRTTViewer的连接配置界面
 """
 
+import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QRadioButton, QCheckBox, QLineEdit,
@@ -431,8 +432,8 @@ class ConnectionDialog(QDialog):
         self.pyocd_target_combo.setEnabled(True)
 
     def _on_download_pack(self):
-        from PyQt5.QtWidgets import QInputDialog, QProgressDialog
-        from ..runtime.pyocd_target_index import install_pack_for_target, refresh_index
+        from PyQt5.QtWidgets import QInputDialog, QDialog, QVBoxLayout, QLabel, QProgressBar
+        from ..runtime.pyocd_target_index import install_pack_for_target, refresh_index, RUNTIME_PACKS_DIR
 
         target, ok = QInputDialog.getText(
             self, '下载 CMSIS Pack',
@@ -443,24 +444,49 @@ class ConnectionDialog(QDialog):
             return
         target = target.strip()
 
-        progress = QProgressDialog(f'正在下载 {target} 的 Pack...\n这可能需要几分钟（首次需下载索引）', None, 0, 0, self)
-        progress.setWindowTitle('下载 Pack')
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
+        dlg = QDialog(self)
+        dlg.setWindowTitle('下载 Pack')
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setFixedSize(520, 200)
+        dlg_layout = QVBoxLayout(dlg)
+
+        status_label = QLabel(f'正在查找 {target} 的 Pack...')
+        dlg_layout.addWidget(status_label)
+
+        url_label = QLabel()
+        url_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        url_label.setWordWrap(True)
+        url_label.setStyleSheet('color: #0066cc;')
+        dlg_layout.addWidget(url_label)
+
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 0)
+        dlg_layout.addWidget(progress_bar)
+
+        from ..runtime.path_config import RUNTIME_PACKS_DIR as _pack_dir
+        hint_label = QLabel(f'也可手动下载 .pack 文件复制到:\n{_pack_dir}')
+        hint_label.setStyleSheet('color: #666; font-size: 11px;')
+        hint_label.setWordWrap(True)
+        dlg_layout.addWidget(hint_label)
+
+        dlg.show()
 
         class _PackDownloadWorker(QThread):
             finished = pyqtSignal(bool, str)
+            progress = pyqtSignal(str)
+            download_url = pyqtSignal(str)
 
             def run(self_inner):
-                def _progress_cb(msg):
-                    pass
-                success, msg = install_pack_for_target(target, _progress_cb)
+                def _on_url(url):
+                    self_inner.download_url.emit(url)
+                success, msg = install_pack_for_target(target, self_inner.progress.emit, _on_url)
                 self_inner.finished.emit(success, msg)
 
         self._pack_dl_worker = _PackDownloadWorker()
+        self._pack_dl_worker.progress.connect(lambda msg: status_label.setText(msg))
+        self._pack_dl_worker.download_url.connect(lambda url: url_label.setText(url))
         self._pack_dl_worker.finished.connect(
-            lambda success, msg: self._on_pack_download_finished(success, msg, progress, target)
+            lambda success, msg: self._on_pack_download_finished(success, msg, dlg, target)
         )
         self._pack_dl_worker.start()
 
@@ -478,7 +504,26 @@ class ConnectionDialog(QDialog):
                 self.pyocd_target_combo.setCurrentText(self.last_pyocd_target)
             QMessageBox.information(self, '下载成功', f'{target} 的 Pack 已安装并刷新目标列表。')
         else:
-            QMessageBox.warning(self, '下载失败', msg)
+            from ..runtime.path_config import RUNTIME_PACKS_DIR
+            from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton, QHBoxLayout
+            pack_dir = os.path.abspath(RUNTIME_PACKS_DIR)
+            dlg = QDialog(self)
+            dlg.setWindowTitle('下载失败')
+            dlg.setFixedSize(420, 160)
+            layout = QVBoxLayout(dlg)
+            layout.addWidget(QLabel(f'{msg}'))
+            layout.addWidget(QLabel('请手动下载CMSIS Pack并复制到以下目录：'))
+            dir_label = QLabel(f'<b>{pack_dir}</b>')
+            dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(dir_label)
+            btn_layout = QHBoxLayout()
+            btn_layout.addStretch()
+            ok_btn = QPushButton('确定')
+            ok_btn.clicked.connect(dlg.accept)
+            btn_layout.addWidget(ok_btn)
+            btn_layout.addStretch()
+            layout.addLayout(btn_layout)
+            dlg.exec_()
     
     def _create_connection_group(self):
         """创建连接方式选择组"""
@@ -973,7 +1018,6 @@ class ConnectionDialog(QDialog):
         """从J-Link DLL更新设备列表到devices.txt - 异步执行"""
         from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
         from PyQt5.QtCore import Qt
-        import os
         
         dll_path = get_external_file("JLink_x64.dll")
         if dll_path is None:

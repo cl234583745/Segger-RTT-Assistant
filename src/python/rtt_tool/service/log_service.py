@@ -90,7 +90,7 @@ class LogService(QObject):
         if self._log_logger:
             try:
                 self._log_logger.info(f'[{timestamp}] [{log_type}] {message}')
-            except:
+            except Exception:
                 pass
         
         # 发射信号
@@ -166,5 +166,5 @@ class LogService(QObject):
         if self._log_handler:
             try:
                 self._log_handler.close()
-            except:
+            except Exception:
                 pass

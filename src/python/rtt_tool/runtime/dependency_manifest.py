@@ -37,18 +37,9 @@ class DependencyItem:
 
 SYSTEM_DEPENDENCIES = []
 
+_PACKED_IN_EXE = {'pylink', 'pefile', 'PyQt5', 'pyqtgraph', 'numpy'}
+
 JLINK_DEPENDENCIES = [
-    DependencyItem(
-        name='pylink', dep_type=DependencyType.PYTHON_PACKAGE,
-        description='J-Link SDK Python封装 (pylink-square)', backend=BackendType.JLINK,
-        required=True, version_constraint='>=0.5.0',
-        download_url='pip:pylink-square>=0.5.0', size_mb=0.7,
-    ),
-    DependencyItem(
-        name='pefile', dep_type=DependencyType.PYTHON_PACKAGE,
-        description='PE文件解析 (DLL位数检测)', backend=BackendType.JLINK,
-        required=True, download_url='pip:pefile', size_mb=0.3,
-    ),
     DependencyItem(
         name='JLink_x64.dll', dep_type=DependencyType.DLL,
         description='J-Link 驱动DLL (64位, 需从SEGGER官网下载)', backend=BackendType.JLINK,

@@ -16,6 +16,7 @@ dist/
 runtime/venv/
 runtime/dll/*.dll
 runtime/packs/*.pack
+runtime/cpm_cache/
 !runtime/dll/.gitkeep
 !runtime/packs/.gitkeep
 

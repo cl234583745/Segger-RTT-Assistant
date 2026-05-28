@@ -495,21 +495,20 @@ class MainWindow(QMainWindow):
     
     def _create_receive_area(self):
         """创建接收区"""
-        group = QGroupBox("接收区")
-        layout = QVBoxLayout(group)
+        self._receive_group = QGroupBox("接收区 (CH0)")
+        layout = QVBoxLayout(self._receive_group)
         
-        # 接收文本框
         self.receive_text = QTextEdit()
         self.receive_text.setReadOnly(True)
         self.receive_text.setFont(QFont("Courier New", 10))
         layout.addWidget(self.receive_text)
         
-        return group
+        return self._receive_group
     
     def _create_send_area(self):
         """创建发送区"""
-        group = QGroupBox("发送区")
-        layout = QVBoxLayout(group)
+        self._send_group = QGroupBox("发送区 (CH0↓)")
+        layout = QVBoxLayout(self._send_group)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(3)
         
@@ -548,7 +547,7 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(bottom_layout)
         
-        return group
+        return self._send_group
     
     def _create_status_bar(self):
         """创建状态栏"""
@@ -806,7 +805,7 @@ class MainWindow(QMainWindow):
                 mode = "HEX" if is_hex else "TXT"
                 self.data_log_handle.write(f"[{timestamp}] [TX][{mode}] {text}\n")
                 self.data_log_handle.flush()
-            except:
+            except Exception:
                 pass
     
     def _on_font_clicked(self):
@@ -911,7 +910,7 @@ class MainWindow(QMainWindow):
                     cs = ConfigService()
                     cs.set('keyword_rules', self._keyword_rules)
                     cs.save()
-                except:
+                except Exception:
                     pass
     
     def _parse_ansi_and_insert(self, text):
@@ -1063,7 +1062,7 @@ class MainWindow(QMainWindow):
                 clean_text = re.sub(r'\x1B\[[\d;]*m', '', text) if has_ansi else text
                 self.data_log_handle.write(f"[{timestamp}] [RX] {clean_text}\n")
                 self.data_log_handle.flush()
-            except:
+            except Exception:
                 pass
     
     def set_connected(self, connected):
@@ -1096,6 +1095,28 @@ class MainWindow(QMainWindow):
             )
         else:
             self.status_label.setStyleSheet("")
+    
+    def update_receive_group_title(self, ch_name: str = "", buf_size: int = 0):
+        """更新接收区GroupBox标题: 显示通道名+缓冲区大小"""
+        parts = ["接收区 (CH0"]
+        if ch_name:
+            parts.append(f' "{ch_name}"')
+        if buf_size > 0:
+            parts.append(f" {buf_size}B")
+        parts.append(")")
+        self._receive_group.setTitle("".join(parts))
+    
+    def update_send_group_title(self, ch_name: str = "", buf_size: int = 0):
+        """更新发送区GroupBox标题: 显示下行通道名+缓冲区大小"""
+        parts = ["发送区 (CH0↓"]
+        if ch_name:
+            parts.append(f' "{ch_name}"')
+        if buf_size > 0:
+            parts.append(f" {buf_size}B")
+        else:
+            parts.append(" 未配置↓")
+        parts.append(")")
+        self._send_group.setTitle("".join(parts))
     
     def update_rx_bytes(self, count):
         """
@@ -1173,15 +1194,29 @@ class MainWindow(QMainWindow):
         if self.data_log_handle:
             try:
                 self.data_log_handle.close()
-            except:
+            except Exception:
                 pass
         event.accept()
     
     def _on_help_contact(self):
-        QMessageBox.information(self, "Bug反馈",
-            "如遇Bug，请将 log 文件夹发送至：\n\n"
-            "292812832@qq.com\n\n"
-            "我们会尽快修复。")
+        from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton, QHBoxLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Bug反馈")
+        dlg.setFixedSize(320, 130)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("如遇Bug，请将log文件夹发送至：可复制邮箱"))
+        email_label = QLabel('<b>292812832@qq.com</b>')
+        email_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(email_label)
+        layout.addWidget(QLabel("我们会尽快修复。"))
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        ok_btn = QPushButton('确定')
+        ok_btn.clicked.connect(dlg.accept)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        dlg.exec_()
 
     def _on_usage_doc(self):
         import os
@@ -1315,7 +1350,7 @@ class MainWindow(QMainWindow):
             try:
                 if hasattr(self, '_log_service') and self._log_service:
                     self._log_service.error(f'打开依赖管理失败: {e}')
-            except:
+            except Exception:
                 pass
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.warning(self, '错误', f'打开依赖管理失败: {e}')

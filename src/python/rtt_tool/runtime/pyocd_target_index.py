@@ -1,5 +1,5 @@
 import os
-import subprocess
+import sys
 import time
 import json
 import glob as _glob
@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from .path_config import (
     RUNTIME_PYOCD_TARGETS_TXT, RUNTIME_VENV_SCRIPTS, RUNTIME_PACKS_DIR,
+    RUNTIME_VENV_SITE_PACKAGES,
 )
 
 _PACK_CACHE_SUBDIR = '_pack_cache'
@@ -40,54 +41,6 @@ class PyOCDTargetEntry:
         return None
 
 
-def _get_pyocd_exe() -> str:
-    """返回 venv 的 python.exe，调用方用 -m pyocd 代替直接运行 pyocd.exe 启动器。"""
-    py_exe = os.path.join(RUNTIME_VENV_SCRIPTS, 'python.exe')
-    if os.path.isfile(py_exe):
-        return py_exe
-    return None
-
-
-def _subprocess_flags():
-    return getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-
-
-def _parse_targets_output(output: str) -> List[PyOCDTargetEntry]:
-    entries = []
-    for line in output.strip().split('\n'):
-        line = line.strip()
-        if not line or line.startswith('#') or line.startswith('-'):
-            continue
-        if line.lower().startswith('name'):
-            continue
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        name = parts[0]
-        vendor = parts[1] if len(parts) > 1 else ''
-        part_number = ''
-        families = ''
-        source = 'builtin'
-        source_idx = -1
-        for i, p in enumerate(parts):
-            if p in ('builtin', 'pack'):
-                source = p
-                source_idx = i
-                break
-        if source_idx == 2:
-            pass
-        elif source_idx == 3:
-            part_number = parts[2]
-        elif source_idx >= 4:
-            part_number = parts[2]
-            families = ' '.join(parts[3:source_idx])
-        entries.append(PyOCDTargetEntry(
-            name=name, vendor=vendor, part_number=part_number,
-            families=families, source=source, pack='-',
-        ))
-    return entries
-
-
 def _pack_cache_dir():
     d = os.path.join(os.path.dirname(RUNTIME_PYOCD_TARGETS_TXT), _PACK_CACHE_SUBDIR)
     os.makedirs(d, exist_ok=True)
@@ -99,7 +52,7 @@ def _pack_cache_path(pack_name: str) -> str:
     return os.path.join(_pack_cache_dir(), safe + '.json')
 
 
-def _pack_signature(pack_path: str) -> tuple:
+def _pack_signature(pack_path: str) -> Optional[tuple]:
     try:
         st = os.stat(pack_path)
         return (st.st_mtime, st.st_size)
@@ -146,7 +99,6 @@ def _save_pack_cache(pack_name: str, pack_path: str, entries: List[PyOCDTargetEn
 
 
 def _get_builtin_targets() -> List[PyOCDTargetEntry]:
-    """从 PyOCD 内置注册表获取目标列表（使用 Python API，不启动子进程）。"""
     entries = []
     try:
         import pyocd.target as _pyocd_target
@@ -173,7 +125,6 @@ def _get_builtin_targets() -> List[PyOCDTargetEntry]:
 
 
 def _load_pack_targets_from_zip(pack_file: str, progress_callback=None) -> List[PyOCDTargetEntry]:
-    """直接解析 .pack (ZIP) 中的 .pdsc (XML) 获取目标列表，归属100%准确。"""
     import zipfile
     import xml.etree.ElementTree as ET
     pname = os.path.basename(pack_file)
@@ -224,7 +175,6 @@ def _load_pack_targets_from_zip(pack_file: str, progress_callback=None) -> List[
 
 
 def _load_pack_targets_pyapi(pack_file: str, builtin_names: set, progress_callback=None) -> List[PyOCDTargetEntry]:
-    """通过 Python API 加载 pack 目标（子进程失败时的回退）。"""
     import pyocd.target as _pyocd_target
     pname = os.path.basename(pack_file)
     if progress_callback:
@@ -267,10 +217,6 @@ def _load_pack_targets_pyapi(pack_file: str, builtin_names: set, progress_callba
 
 
 def generate_index(progress_callback=None) -> List[PyOCDTargetEntry]:
-    pyocd_exe = _get_pyocd_exe()
-    if not pyocd_exe:
-        return []
-
     entries = []
     seen_targets = set()
 
@@ -376,68 +322,163 @@ def refresh_index(log_service=None, progress_callback=None) -> List[PyOCDTargetE
     return entries
 
 
-def find_pack_for_target(target_name: str, log_service=None) -> tuple:
-    pyocd_exe = _get_pyocd_exe()
-    if not pyocd_exe:
-        return False, 'pyocd 未找到'
+def _cpm_cache_dir():
+    d = os.path.join(os.path.dirname(RUNTIME_PACKS_DIR), 'cpm_cache')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _get_cpm_cache(progress_callback=None):
     try:
-        result = subprocess.run(
-            [pyocd_exe, '-m', 'pyocd', 'pack', 'find', target_name],
-            capture_output=True, text=True, timeout=30,
-            creationflags=_subprocess_flags(),
-        )
-        output = result.stdout + result.stderr
-        if result.returncode == 0 and target_name.lower() in output.lower():
-            lines = [l.strip() for l in output.strip().split('\n') if l.strip() and not l.strip().startswith('#')]
-            return True, '\n'.join(lines) if lines else output.strip()
-        return False, output.strip() if output.strip() else f'未找到 {target_name} 对应的 Pack'
+        from cmsis_pack_manager.pack_manager import Cache
+        cpm_dir = _cpm_cache_dir()
+        cache = Cache(silent=True, __=None, json_path=cpm_dir, data_path=cpm_dir)
+        if not cache.index:
+            if progress_callback:
+                progress_callback('正在下载 Pack 索引（需联网，约1-2分钟）...')
+            import threading
+            exc = [None]
+            def _download():
+                try:
+                    cache.cache_descriptors()
+                except Exception as e:
+                    exc[0] = e
+            t = threading.Thread(target=_download, daemon=True)
+            t.start()
+            t.join(timeout=180)
+            if t.is_alive():
+                if progress_callback:
+                    progress_callback('下载索引超时（3分钟），请检查网络后重试')
+                return None
+            if exc[0] is not None:
+                return None
+            cache = Cache(silent=True, __=None, json_path=cpm_dir, data_path=cpm_dir)
+        return cache
+    except Exception:
+        return None
+
+
+def find_pack_for_target(target_name: str, log_service=None) -> tuple:
+    cache = _get_cpm_cache()
+    if cache is None:
+        return False, 'cmsis_pack_manager 不可用（请检查网络连接或重试）'
+    try:
+        matches = {k: v for k, v in cache.index.items() if target_name.lower() in k.lower()}
+        if not matches:
+            return False, f'未找到 {target_name} 对应的 Pack'
+        lines = []
+        for name, info in sorted(matches.items()):
+            fp = info.get('from_pack', {})
+            vendor = fp.get('vendor', '')
+            pack = fp.get('pack', '')
+            version = fp.get('version', '')
+            lines.append(f'{name}\t{vendor}\t{pack}\t{version}')
+        return True, '\n'.join(lines)
     except Exception as e:
         return False, str(e)
 
 
-def install_pack_for_target(target_name: str, progress_callback=None) -> tuple:
-    pyocd_exe = _get_pyocd_exe()
-    if not pyocd_exe:
-        return False, 'pyocd 未找到'
+def _download_pack_direct(vendor, pack, version, base_url, dest_dir, progress_callback=None):
+    """直接用 urllib 下载 .pack 文件到指定目录，绕过 cpm 的 .pdsc 机制。"""
+    import urllib.request
+    import urllib.error
+    pack_filename = f'{vendor}.{pack}.{version}.pack'
+    dest_path = os.path.join(dest_dir, pack_filename)
+    if os.path.isfile(dest_path):
+        if progress_callback:
+            progress_callback(f'  {pack_filename} 已存在，跳过')
+        return True
+    pack_url = base_url.rstrip('/') + '/' + pack_filename
+    if progress_callback:
+        progress_callback(f'  下载 {pack_url}')
+    try:
+        req = urllib.request.Request(pack_url, headers={
+            'User-Agent': 'RTT-Assistant/1.0',
+            'Accept': '*/*',
+        })
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            total = int(resp.headers.get('Content-Length', 0))
+            if progress_callback and total:
+                size_mb = total / 1024 / 1024
+                progress_callback(f'  文件大小: {size_mb:.1f}MB，下载中请耐心等待...')
+            downloaded = 0
+            last_pct = -1
+            with open(dest_path, 'wb') as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = downloaded * 100 // total
+                        if pct != last_pct and pct % 10 == 0:
+                            last_pct = pct
+                            if progress_callback:
+                                progress_callback(f'  下载进度: {pct}% ({downloaded/1024/1024:.1f}/{total/1024/1024:.1f}MB)')
+        if os.path.isfile(dest_path) and os.path.getsize(dest_path) > 0:
+            return True
+        else:
+            if os.path.isfile(dest_path):
+                os.remove(dest_path)
+            return False
+    except Exception as e:
+        if os.path.isfile(dest_path):
+            os.remove(dest_path)
+        if progress_callback:
+            progress_callback(f'  下载失败: {e}')
+        return False
+
+
+def install_pack_for_target(target_name: str, progress_callback=None, url_callback=None) -> tuple:
+    cache = _get_cpm_cache(progress_callback)
+    if cache is None:
+        return False, 'cmsis_pack_manager 不可用（请检查网络连接或重试）'
     try:
         if progress_callback:
             progress_callback(f'正在查找 {target_name} 的 Pack...')
 
-        find_result = subprocess.run(
-            [pyocd_exe, '-m', 'pyocd', 'pack', 'find', target_name],
-            capture_output=True, text=True, timeout=30,
-            creationflags=_subprocess_flags(),
-        )
+        matches = {k: v for k, v in cache.index.items() if target_name.lower() in k.lower()}
+        if not matches:
+            return False, f'未找到 {target_name} 对应的 Pack'
 
-        pack_dfp_names = set()
-        for line in (find_result.stdout + find_result.stderr).strip().split('\n'):
-            line = line.strip()
-            if not line or line.startswith('#') or line.startswith('-') or line.lower().startswith('part'):
-                continue
-            parts = line.split()
-            if len(parts) >= 3:
-                pack_dfp_names.add(parts[2])
+        pack_info = {}
+        for info in matches.values():
+            fp = info.get('from_pack', {})
+            vendor = fp.get('vendor', '')
+            pack = fp.get('pack', '')
+            version = fp.get('version', '')
+            url = fp.get('url', '')
+            if vendor and pack and version and url:
+                key = f'{vendor}.{pack}.{version}'
+                if key not in pack_info:
+                    pack_info[key] = (vendor, pack, version, url)
+
+        if not pack_info:
+            return False, f'未找到 {target_name} 对应的 Pack 下载信息'
+
+        os.makedirs(RUNTIME_PACKS_DIR, exist_ok=True)
+        failed = []
+        for key, (vendor, pack, version, url) in pack_info.items():
+            pack_url = url.rstrip('/') + '/' + f'{vendor}.{pack}.{version}.pack'
+            if url_callback:
+                url_callback(pack_url)
+            if progress_callback:
+                progress_callback(f'正在下载 {vendor}.{pack} v{version}...')
+            ok = _download_pack_direct(vendor, pack, version, url, RUNTIME_PACKS_DIR, progress_callback)
+            if not ok:
+                failed.append(key)
+
+        if failed:
+            return False, f'Pack 下载失败: {", ".join(failed)}（请检查网络连接，或手动下载到 {RUNTIME_PACKS_DIR}）'
 
         if progress_callback:
-            progress_callback(f'正在下载 {target_name} 的 Pack...')
-
-        result = subprocess.run(
-            [pyocd_exe, '-m', 'pyocd', 'pack', 'install', target_name],
-            capture_output=True, text=True, timeout=300,
-            creationflags=_subprocess_flags(),
-        )
-        output = result.stdout + result.stderr
-
-        if progress_callback:
-            progress_callback('Pack 下载完成，正在复制到 runtime/packs/...')
-
-        _copy_packs_to_runtime(pack_dfp_names)
+            progress_callback('Pack 下载完成，刷新目标索引...')
 
         refresh_index(log_service=None, progress_callback=progress_callback)
 
-        return result.returncode == 0, output.strip()
-    except subprocess.TimeoutExpired:
-        return False, 'Pack 下载超时(300秒)'
+        names = [f'{v}.{p}' for v, p, _, _ in pack_info.values()]
+        return True, f'已下载 {len(pack_info)} 个 Pack: {", ".join(names)}'
     except Exception as e:
         return False, str(e)
 

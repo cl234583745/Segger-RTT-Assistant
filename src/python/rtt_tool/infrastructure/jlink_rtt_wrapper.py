@@ -43,6 +43,7 @@ class JLinkRTTWrapper:
         self.jlink = None
         self.connected = False
         self.rtt_initialized = False
+        self._rtt_cb_addr = 0
         self.log_service = log_service
         
         # 查找JLinkARM.dll
@@ -96,6 +97,103 @@ class JLinkRTTWrapper:
         if self.log_service:
             getattr(self.log_service, level)(msg)
     
+    def _get_cb_addr_via_dll(self) -> int:
+        """绕过pylink直接调DLL获取RTT CB地址
+        
+        策略：构造JLinkRTTerminalStart(ConfigBlockAddress=0)，
+        调DLL的JLINK_RTTERMINAL_Control(START)让DLL自动搜索CB，
+        此调用同时初始化RTT(等效于rtt_start())，
+        然后检查ConfigBlockAddress是否被DLL写回找到的CB地址。
+        
+        Returns:
+            int: CB地址，0表示DLL未写回(但RTT可能已初始化)
+        """
+        try:
+            import ctypes
+            import pylink.enums as pl_enums
+            import pylink.structs as pl_structs
+
+            config = pl_structs.JLinkRTTerminalStart()
+            config.ConfigBlockAddress = 0
+            cmd_start = pl_enums.JLinkRTTCommand.START
+
+            self.jlink.rtt_control(cmd_start, config)
+
+            written_addr = config.ConfigBlockAddress
+            if written_addr > 0:
+                self._log('info', f'auto模式: DLL写回CB地址=0x{written_addr:08X}')
+                return written_addr
+            self._log('info', 'auto模式: DLL未写回CB地址(ConfigBlockAddress仍为0)')
+        except Exception as e:
+            self._log('warning', f'auto模式: DLL START+写回失败: {e}')
+        return 0
+
+    def _find_cb_addr_from_device_info(self) -> int:
+        """从DLL设备信息获取RAM区域并搜索RTT CB地址
+        
+        策略1: 从jlink._device(JLinkDeviceInfo)获取RAM区域
+               - aRAMArea数组(含Addr+Size, 最多32个)
+               - 回退到RAMAddr+RAMSize
+        策略2: 回退到memory_zones()获取RAM区域(无Size，默认搜1MB)
+        
+        Returns:
+            int: CB地址，未找到返回0
+        """
+        SEARCH_SIZE_FALLBACK = 0x00100000
+        ram_regions = []
+
+        try:
+            dev_info = getattr(self.jlink, '_device', None)
+            if dev_info is not None:
+                for i in range(32):
+                    try:
+                        area = dev_info.aRAMArea[i]
+                        if area.Addr > 0 and area.Size > 0:
+                            ram_regions.append((area.Addr, area.Size, f"aRAMArea[{i}]"))
+                    except Exception:
+                        break
+                if not ram_regions:
+                    ram_addr = getattr(dev_info, 'RAMAddr', 0)
+                    ram_size = getattr(dev_info, 'RAMSize', 0)
+                    if ram_addr > 0 and ram_size > 0:
+                        ram_regions.append((ram_addr, ram_size, "RAMAddr/RAMSize"))
+                if ram_regions:
+                    self._log('info', f'auto模式: 从DeviceInfo获取到{len(ram_regions)}个RAM区域')
+        except Exception as e:
+            self._log('warning', f'auto模式: DeviceInfo读取失败: {e}')
+
+        if not ram_regions:
+            try:
+                zones = self.jlink.memory_zones()
+                if zones:
+                    ram_keywords = ['ram', 'sram', 'data', 'dram']
+                    for zone in zones:
+                        desc = zone.sDesc.decode() if isinstance(zone.sDesc, bytes) else zone.sDesc
+                        name = zone.sName.decode() if isinstance(zone.sName, bytes) else zone.sName
+                        desc_lower = (desc or '').lower()
+                        name_lower = (name or '').lower()
+                        if any(kw in desc_lower or kw in name_lower for kw in ram_keywords):
+                            ram_regions.append((zone.VirtAddr, SEARCH_SIZE_FALLBACK, f"zone:{name}"))
+                    if ram_regions:
+                        self._log('info', f'auto模式: 从memory zones获取到{len(ram_regions)}个RAM区域')
+            except Exception as e:
+                self._log('warning', f'auto模式: memory_zones查询失败: {e}')
+
+        if not ram_regions:
+            self._log('info', 'auto模式: 无可用RAM区域(DeviceInfo和memory_zones均未提供)')
+            return 0
+
+        for addr, size, source in ram_regions:
+            end_addr = addr + size
+            try:
+                self._log('info', f'auto模式: 在{source}(0x{addr:08X}-0x{end_addr:08X})中搜索CB...')
+                found = self._search_rtt_in_range(addr, end_addr)
+                if found is not None:
+                    return found
+            except Exception:
+                continue
+        return 0
+
     def _log_memory_regions(self):
         """获取并记录芯片内存区域信息"""
         try:
@@ -110,6 +208,99 @@ class JLinkRTTWrapper:
                 self._log('info', f'  区域[{i}]: 名称={name}, 描述={desc}, 虚拟起始地址=0x{zone.VirtAddr:08X}')
         except Exception as e:
             self._log('warning', f'获取内存区域信息失败: {e}')
+    
+    def get_down_buffer_info(self, cb_addr: int = 0) -> dict:
+        """直接从MCU内存读取RTT控制块中Down buffer的名称和大小
+        
+        Args:
+            cb_addr: RTT控制块地址（若为0则尝试通过rtt_get_buf_descriptor获取）
+        
+        SEGGER_RTT_CB内存布局(32位ARM):
+          acID[16]                (16 bytes)
+          MaxNumUpBuffers        (4 bytes, int32)
+          MaxNumDownBuffers      (4 bytes, int32)
+          aUp[MaxNumUpBuffers]   (每个24 bytes)
+          aDown[MaxNumDownBuffers](每个24 bytes)
+        
+        每个BUFFER_UP/DOWN entry:
+          sName        (4 bytes, const char*指针)
+          pBuffer      (4 bytes, char*指针)
+          SizeOfBuffer (4 bytes, uint32)
+          WrOff        (4 bytes, uint32)
+          RdOff        (4 bytes, uint32)
+          Flags        (4 bytes, uint32)
+        """
+        import struct
+        result = {}
+        if not self.jlink or not self.rtt_initialized:
+            return result
+        if cb_addr == 0:
+            return result
+        cb_addr = self._verify_and_correct_cb_addr(cb_addr)
+        if cb_addr == 0:
+            return result
+        try:
+            status = self.jlink.rtt_get_status()
+            num_up = status.NumUpBuffers
+            num_down = status.NumDownBuffers
+            if num_down == 0:
+                return result
+            cb_header = 16 + 4 + 4
+            down_offset = cb_header + num_up * 24
+            ENTRY = 24
+            for i in range(min(num_down, 10)):
+                addr = cb_addr + down_offset + i * ENTRY
+                try:
+                    raw = bytes(self.jlink.memory_read8(addr, ENTRY))
+                    s_name_ptr = struct.unpack_from('<I', raw, 0)[0]
+                    p_buf_ptr = struct.unpack_from('<I', raw, 4)[0]
+                    buf_size = struct.unpack_from('<I', raw, 8)[0]
+                    name = ""
+                    if s_name_ptr > 0 and buf_size > 0:
+                        try:
+                            nb = bytes(self.jlink.memory_read8(s_name_ptr, 32))
+                            nul = nb.find(b'\x00')
+                            if nul >= 0:
+                                nb = nb[:nul]
+                            name = nb.decode('utf-8', errors='replace')
+                        except Exception:
+                            pass
+                    if buf_size > 0:
+                        result[i] = (buf_size, name or f"Down[{i}]")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return result
+    
+    def _verify_and_correct_cb_addr(self, addr: int) -> int:
+        """验证CB地址的SEGGER RTT签名，若不对在±256B范围搜索校正
+        
+        Args:
+            addr: 候选CB地址
+            
+        Returns:
+            int: 校正后的CB地址（acID位置），0表示未找到
+        """
+        if addr == 0:
+            return 0
+        try:
+            sig_check = bytes(self.jlink.memory_read8(addr, 12))
+            if sig_check[:10] == b'SEGGER RTT':
+                return addr
+        except Exception:
+            pass
+        for offset in range(-256, 257, 4):
+            try:
+                check = bytes(self.jlink.memory_read8(addr + offset, 12))
+                if check[:10] == b'SEGGER RTT':
+                    corrected = addr + offset
+                    self._log('info', f'CB地址校正: 0x{addr:08X} -> 0x{corrected:08X} (偏移{offset:+d})')
+                    return corrected
+            except Exception:
+                continue
+        self._log('warning', f'CB地址0x{addr:08X}附近±256B未找到SEGGER RTT签名')
+        return 0
     
     def _log_rtt_info(self):
         """RTT启动后，获取并打印RTT控制块信息"""
@@ -250,7 +441,7 @@ class JLinkRTTWrapper:
             if self.jlink:
                 try:
                     self.jlink.close()
-                except:
+                except Exception:
                     pass
                 self.jlink = None
             raise RuntimeError(f"连接失败: {e}")
@@ -260,7 +451,7 @@ class JLinkRTTWrapper:
         try:
             if self.jlink:
                 self.jlink.close()
-        except:
+        except Exception:
             pass
         
         self.connected = False
@@ -293,6 +484,10 @@ class JLinkRTTWrapper:
             if rtt_mode == 'address':
                 self._log('info', f'使用指定RTT地址: 0x{rtt_address:X}')
                 self.jlink.rtt_start(rtt_address)
+                corrected = self._verify_and_correct_cb_addr(rtt_address)
+                self._rtt_cb_addr = corrected
+                if corrected and corrected != rtt_address:
+                    self._log('info', f'CB地址已校正: 0x{rtt_address:08X} -> 0x{corrected:08X}')
                 self._log_rtt_info()
                 
             elif rtt_mode == 'range':
@@ -300,6 +495,7 @@ class JLinkRTTWrapper:
                 found_addr = self._search_rtt_in_range(range_start, range_end)
                 if found_addr is not None:
                     self._log('info', f'使用搜索到的RTT地址: 0x{found_addr:08X}')
+                    self._rtt_cb_addr = found_addr
                     self.jlink.rtt_start(found_addr)
                     self._log_rtt_info()
                 else:
@@ -313,7 +509,20 @@ class JLinkRTTWrapper:
                     
             else:
                 self._log('info', '自动检测RTT控制块(J-Link DLL内部扫描RAM区域)...')
-                self.jlink.rtt_start()
+                cb_addr = self._get_cb_addr_via_dll()
+                if cb_addr > 0:
+                    self._rtt_cb_addr = cb_addr
+                    self._log('info', f'auto模式: DLL返回CB地址=0x{cb_addr:08X}')
+                else:
+                    self._log('info', 'auto模式: DLL未写回CB地址，尝试rtt_start+device_info...')
+                    self.jlink.rtt_start()
+                    cb_from_dev = self._find_cb_addr_from_device_info()
+                    if cb_from_dev > 0:
+                        self._rtt_cb_addr = cb_from_dev
+                        self._log('info', f'auto模式: 通过DeviceInfo/memory_zones定位CB地址=0x{cb_from_dev:08X}')
+                    else:
+                        self._rtt_cb_addr = 0
+                        self._log('warning', 'auto模式: 无法定位CB地址，Down buffer信息不可用(请使用range或address模式)')
                 self._log_rtt_info()
             
             self.rtt_initialized = True
@@ -370,5 +579,5 @@ class JLinkRTTWrapper:
         """安全断开连接(atexit回调)"""
         try:
             self.disconnect()
-        except:
+        except Exception:
             pass

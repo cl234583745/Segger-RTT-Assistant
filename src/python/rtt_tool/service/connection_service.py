@@ -125,10 +125,10 @@ class ConnectionService(QObject):
 
             # 在日志中打印等效的命令行字符串，方便排查问题
             if self.log_service and self._backend is not None:
-                target_str = config.get('pyocd_target', '')
+                bt = self._backend.backend_type
+                target_str = config.get('device', '') if bt == 'jlink' else config.get('pyocd_target', '')
                 speed_val = config.get('speed', 4000)
                 mode = config.get('connect_mode', 'under_reset')
-                bt = self._backend.backend_type
                 if bt == 'pyocd':
                     cli = f'pyocd rtt --target {target_str} -f {speed_val}k --connect={mode}'
                     if rtt_cli_flags:

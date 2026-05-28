@@ -114,18 +114,6 @@ class PyOCDBackend(DebuggerBackend):
         except Exception:
             pass
 
-    def _find_pyocd_exe(self) -> str:
-        """查找可用的 pyocd 可执行文件。"""
-        candidates = ['pyocd']
-        custom_path = os.environ.get('PYOCD_EXE_PATH', '')
-        if custom_path and os.path.isfile(custom_path):
-            candidates.insert(0, custom_path)
-        import shutil
-        for cmd in candidates:
-            if os.path.isfile(cmd) or shutil.which(cmd):
-                return cmd
-        return None
-
     @staticmethod
     def _subprocess_flags():
         import subprocess
@@ -682,21 +670,6 @@ class PyOCDBackend(DebuggerBackend):
             self._diag_log(f'get_probe_list: pyusb fallback found {len(probes)} probes')
         return probes
 
-    def _enumerate_subprocess(self):
-        """使用 pyocd list 子进程回退。"""
-        probes = []
-        import subprocess
-        pyocd_exe = self._find_pyocd_exe()
-        if pyocd_exe:
-            result = subprocess.run(
-                [pyocd_exe, 'list'],
-                capture_output=True, text=True, timeout=8,
-                creationflags=self._subprocess_flags()
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                probes = self._parse_pyocd_list_output(result.stdout)
-        return probes
-
     def get_probe_list(self, force=False) -> list:
         self._ensure_libusb_path()
         now = time.time()
@@ -720,33 +693,13 @@ class PyOCDBackend(DebuggerBackend):
                         probes = self._enumerate_pyusb()
                     except Exception as e3:
                         self._diag_log(f'get_probe_list: pyusb also failed: {type(e3).__name__}: {e3}')
-        if not probes and not getattr(sys, 'frozen', False):
+        if not probes:
             try:
-                probes = self._enumerate_subprocess()
-            except Exception as e:
-                self._log('warning', f'pyocd subprocess探测失败: {e}')
+                probes = self._enumerate_pyocd_aggregator()
+            except Exception:
+                pass
         self._probe_cache = probes
         self._probe_cache_time = now
-        return probes
-
-    def _parse_pyocd_list_output(self, output: str) -> list:
-        """解析 `pyocd list` 命令输出。"""
-        import re
-        probes = []
-        for line in output.strip().split('\n'):
-            line = line.strip()
-            if not line or line.startswith('#') or line.startswith('-'):
-                continue
-            match = re.match(r'\s*(\d+)\s+(.+?)\s{2,}(\S+)\s+', line)
-            if match:
-                name = match.group(2).strip()
-                serial = match.group(3).strip()
-                probes.append({
-                    'type': 'cmsis-dap',
-                    'name': name,
-                    'serial': serial,
-                    'backend': 'pyocd'
-                })
         return probes
 
     def read_memory(self, address: int, var_type: str = 'uint32') -> object:

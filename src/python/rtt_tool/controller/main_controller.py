@@ -944,6 +944,7 @@ class MainController(QObject):
         """连接成功后，自动读取RTT通道名、缓冲区大小并设置格式"""
         channel_name = None
         mcu_buf_info = {}
+        down_buf_info = {}
         try:
             backend = self.connection_service.get_backend()
             if backend is None:
@@ -961,6 +962,22 @@ class MainController(QObject):
                             self._hs_processor.set_channel_jscope_format(ch_idx, name)
                     except Exception:
                         continue
+                for ch_idx in range(10):
+                    try:
+                        desc = jlink.rtt_get_buf_descriptor(ch_idx, up=False)
+                        name = desc.acName.decode() if isinstance(desc.acName, bytes) else desc.acName
+                        if desc.SizeOfBuffer > 0:
+                            down_buf_info[ch_idx] = (desc.SizeOfBuffer, name or f"Down[{ch_idx}]")
+                    except Exception:
+                        continue
+                if not down_buf_info and hasattr(backend, '_wrapper'):
+                    cb_addr = getattr(backend._wrapper, '_rtt_cb_addr', 0)
+                    if cb_addr > 0:
+                        direct_down = backend._wrapper.get_down_buffer_info(cb_addr)
+                        if direct_down:
+                            down_buf_info = direct_down
+                            if self.log_service:
+                                self.log_service.info(f"  从MCU内存直接读取Down buffer信息(CB=0x{cb_addr:08X})")
             elif hasattr(backend, '_rtt_cb') and backend._rtt_cb is not None:
                 for ch_idx, ch in enumerate(backend._rtt_cb.up_channels):
                     name = getattr(ch, 'name', None)
@@ -976,6 +993,16 @@ class MainController(QObject):
                             mcu_buf_info[ch_idx] = (buf_size, name or f"Up[{ch_idx}]")
                     except Exception:
                         pass
+                for ch_idx, ch in enumerate(backend._rtt_cb.down_channels):
+                    name = getattr(ch, 'name', None)
+                    if isinstance(name, bytes):
+                        name = name.decode()
+                    try:
+                        buf_size = getattr(ch, 'size', 0) or 0
+                        if buf_size > 0:
+                            down_buf_info[ch_idx] = (buf_size, name or f"Down[{ch_idx}]")
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -988,6 +1015,25 @@ class MainController(QObject):
             if self.log_service:
                 for ch, (sz, nm) in sorted(mcu_buf_info.items()):
                     self.log_service.info(f"  MCU缓冲 CH{ch}: \"{nm}\" 大小={sz}B")
+            if 0 in mcu_buf_info:
+                sz0, nm0 = mcu_buf_info[0]
+                self.window.update_receive_group_title(ch_name=nm0, buf_size=sz0)
+        
+        if down_buf_info and 0 in down_buf_info:
+            sz0, nm0 = down_buf_info[0]
+            if sz0 > 0:
+                self.window.update_send_group_title(ch_name=nm0, buf_size=sz0)
+            else:
+                ch0_up_name = mcu_buf_info.get(0, (0, ""))[1] if mcu_buf_info else ""
+                self.window.update_send_group_title(ch_name=ch0_up_name, buf_size=0)
+            if self.log_service:
+                for ch, (sz, nm) in sorted(down_buf_info.items()):
+                    self.log_service.info(f"  MCU缓冲 CH{ch}↓: \"{nm}\" 大小={sz}B")
+        elif mcu_buf_info and 0 in mcu_buf_info:
+            ch0_up_name = mcu_buf_info[0][1]
+            self.window.update_send_group_title(ch_name=ch0_up_name, buf_size=0)
+            if self.log_service:
+                self.log_service.info("  MCU未配置Down缓冲区，发送区使用Up[0]通道名")
 
     def _on_acquisition_start(self) -> None:
         if not self.connection_service.is_connected:

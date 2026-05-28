@@ -3,7 +3,7 @@ import sys
 
 from .path_config import (
     RUNTIME_DIR, inject_python_path, inject_dll_path, ensure_runtime_dirs,
-    find_libusb_dll, RUNTIME_PYOCD_YAML, RUNTIME_PACKS_DIR,
+    fix_pyvenv_cfg, find_libusb_dll, RUNTIME_PYOCD_YAML, RUNTIME_PACKS_DIR,
 )
 
 
@@ -12,6 +12,7 @@ class RuntimeGuard:
     @classmethod
     def setup(cls):
         ensure_runtime_dirs()
+        fix_pyvenv_cfg()
         inject_python_path()
         inject_dll_path()
         cls._setup_pyocd_config()

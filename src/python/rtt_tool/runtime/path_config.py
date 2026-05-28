@@ -43,6 +43,51 @@ def ensure_runtime_dirs():
         os.makedirs(d, exist_ok=True)
 
 
+def fix_pyvenv_cfg():
+    """自动修复 pyvenv.cfg 中的绝对路径，使其指向当前环境的 Python。
+    
+    场景：项目移到其他电脑后，pyvenv.cfg 中的 home/executable 路径失效，
+    导致 venv 的 python.exe 无法启动。此函数检测并自动修复。
+    """
+    venv_cfg = os.path.join(RUNTIME_VENV_DIR, 'pyvenv.cfg')
+    venv_python = os.path.abspath(RUNTIME_VENV_PYTHON)
+    if not os.path.isfile(venv_python) or not os.path.isfile(venv_cfg):
+        return
+    need_fix = False
+    version_line = ''
+    try:
+        with open(venv_cfg, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('executable ='):
+                cfg_exe = stripped.split('=', 1)[1].strip()
+                if not os.path.isfile(cfg_exe):
+                    need_fix = True
+            elif stripped.startswith('home ='):
+                cfg_home = stripped.split('=', 1)[1].strip()
+                if not os.path.isdir(cfg_home):
+                    need_fix = True
+            elif stripped.startswith('version ='):
+                version_line = line if line.endswith('\n') else line + '\n'
+    except Exception:
+        return
+    if not need_fix:
+        return
+    current_python = os.path.abspath(sys.executable)
+    python_home = os.path.dirname(current_python)
+    try:
+        with open(venv_cfg, 'w', encoding='utf-8') as f:
+            f.write(f'home = {python_home}\n')
+            f.write('include-system-site-packages = false\n')
+            if version_line:
+                f.write(version_line)
+            f.write(f'executable = {current_python}\n')
+            f.write(f'command = {current_python} -m venv {os.path.abspath(RUNTIME_VENV_DIR)}\n')
+    except Exception:
+        pass
+
+
 def inject_python_path():
     ensure_runtime_dirs()
     if os.path.isdir(RUNTIME_VENV_SITE_PACKAGES):

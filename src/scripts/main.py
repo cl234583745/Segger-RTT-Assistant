@@ -46,13 +46,13 @@ def exception_hook(exctype, value, traceback):
         log_path = os.path.join(RUNTIME_LOG_DIR, 'rtt_system.log')
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] [ERROR] {error_msg}\n")
-    except:
+    except Exception:
         pass
 
     try:
         from PyQt5.QtWidgets import QMessageBox
         QMessageBox.critical(None, "错误", f"程序发生错误:\n\n{error_msg}")
-    except:
+    except Exception:
         pass
 
     sys.__excepthook__(exctype, value, traceback)

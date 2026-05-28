@@ -26,18 +26,28 @@ from .dependency_manifest import (
 
 def _get_runtime_package_version(name: str) -> str:
     try:
+        import importlib.metadata
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            pass
         orig_path = sys.path.copy()
         if RUNTIME_VENV_SITE_PACKAGES not in sys.path:
             sys.path.insert(0, RUNTIME_VENV_SITE_PACKAGES)
-        mod = importlib.import_module(name)
-        ver = getattr(mod, '__version__', None)
-        if ver is None and name == 'PyQt5':
-            from PyQt5.QtCore import PYQT_VERSION_STR
-            ver = PYQT_VERSION_STR
-        if ver is None:
-            ver = '未知'
-        sys.path[:] = orig_path
-        return ver
+        try:
+            dist = importlib.metadata.distribution(name)
+            return dist.metadata['Version'] or '未知'
+        except Exception:
+            pass
+        try:
+            mod = importlib.import_module(name)
+            ver = getattr(mod, '__version__', None)
+            if ver is None and name == 'PyQt5':
+                from PyQt5.QtCore import PYQT_VERSION_STR
+                ver = PYQT_VERSION_STR
+            return ver or '未知'
+        finally:
+            sys.path[:] = orig_path
     except Exception as e:
         return f'获取失败({e})'
 
@@ -174,21 +184,13 @@ def show_dependency_upgrade_dialog(parent=None):
             rows = []
 
             venv_python = RUNTIME_VENV_PYTHON
-            venv_python_ver = '未知'
-            if os.path.isfile(venv_python):
-                try:
-                    result = subprocess.run(
-                        [venv_python, '--version'], capture_output=True, text=True, timeout=5,
-                    )
-                    venv_python_ver = result.stdout.strip() or result.stderr.strip()
-                except Exception:
-                    pass
+            venv_python_ver = f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'
 
             rows.append({
                 'name': 'Python',
-                'type': '解释器',
+                'type': '解释器(exe内嵌)',
                 'version': venv_python_ver,
-                'location': RUNTIME_VENV_DIR,
+                'location': '(打包进exe)',
                 'pip_spec': None,
                 'can_upgrade': False,
             })

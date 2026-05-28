@@ -21,9 +21,20 @@
 1. 双击 `RTT-Assistant vx.x.x.exe` 启动
 2. 点击"配置"按钮
 3. 点击"刷新"选择探针类型（J-Link / DAP-Link / ST-Link）
-4. 选择目标芯片，配置接口和速度(列表没有则点击“Pack”按钮，输入型号自动下载，也可以手动下载)
+4. 选择目标芯片，配置接口和速度
 5. 选择RTT控制块模式(3选1)
 6. 点击"连接"按钮，开始收发RTT数据
+
+### CMSIS Pack 自动下载
+
+目标芯片列表中没有需要的型号时，点击 **"Pack"** 按钮：
+
+1. 输入芯片型号（如 `STM32U575`、`R7FA6M5AF`、`GD32F407`）
+2. 程序自动从 CMSIS Pack 服务器下载对应 .pack 文件到 `runtime/packs/`
+3. 下载对话框显示下载链接（可选中复制）、进度、文件大小
+4. 下载完成后自动刷新目标列表
+
+**手动下载**：如果自动下载失败（网络问题等），可手动下载 .pack 文件复制到 `runtime/packs/` 目录，然后点击"更新"刷新
 
 ## 与 SEGGER RTT 工具对比
 
@@ -39,7 +50,7 @@
 | **关键字高亮** | ✅ 自定义 | ❌ | ❌ | ❌ | ❌ |
 | **HEX 显示** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **时间戳** | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **CMSIS Pack 管理** | ✅ 自动加载 | ❌ | ❌ | ❌ | ❌ |
+| **CMSIS Pack 管理** | ✅ 自动下载 | ❌ | ❌ | ❌ | ❌ |
 | **MAP 文件符号搜索** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **RTT 控制块范围搜索** | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **数据导出** | ✅ | ✅ | ❌ | ✅ 文件日志 | ✅ |
@@ -159,11 +170,13 @@ SEGGER_RTT_Write(1, buf, 5);
 ## 目录结构（打包后）
 
 ```
-RTT-Assistant v2.1.1/
-├── RTT-Assistant v2.1.1.exe   # 主程序
+RTT-Assistant v2.1.2/
+├── RTT-Assistant v2.1.2.exe   # 主程序
 ├── config/                     # 配置文件
 │   └── config.json
 ├── runtime/
+│   ├── cpm_cache/              # CMSIS Pack 索引（搜索用）
+│   │   └── index.json
 │   ├── dll/                    # 动态链接库
 │   │   ├── JLink_x64.dll
 │   │   └── libusb-1.0.dll
@@ -179,8 +192,54 @@ RTT-Assistant v2.1.1/
 
 ## 源码开发
 
+### 环境要求
+
+- **Python 3.13**（64位）
+- **Git**
+
+### git clone 后环境搭建
+
+假设新电脑没有任何依赖，按以下步骤操作：
+
 ```bash
-python main.py
+# 1. 安装 Python 3.13（64位）
+#    从 https://www.python.org/downloads/ 下载安装
+#    安装时勾选 "Add Python to PATH"
+
+# 2. 克隆代码
+git clone https://github.com/cl234583745/RTT-Assistant.git
+cd RTT-Assistant
+
+# 3. 创建 venv 并安装运行时依赖
+python -m venv runtime/venv
+runtime/venv/Scripts/pip install -r runtime/requirements.txt
+
+# 4. 安装 GUI 依赖（开发调试用，已打包进 exe 不影响分发）
+pip install PyQt5 pyqtgraph numpy markdown psutil
+
+# 5. 下载 CMSIS Pack 索引（首次需要联网，约1-2分钟）
+#    方式1：直接运行程序，首次点击 Pack 时自动下载
+#    方式2：从其他已安装的电脑复制 runtime/cpm_cache/ 目录
+
+# 6. 运行
+python src/scripts/main.py
+```
+
+### 项目移到其他电脑
+
+项目移到其他电脑后，`runtime/venv/pyvenv.cfg` 中的 Python 路径可能失效。有两种处理方式：
+
+**方式1：程序自动修复（推荐）**
+- 确保新电脑已安装 Python 3.13
+- 直接运行 `python src/scripts/main.py`，程序启动时自动修复 `pyvenv.cfg` 路径
+
+**方式2：重建 venv**
+```bash
+# 删除旧 venv
+rmdir /s /q runtime\venv
+# 用新电脑的 Python 重建
+python -m venv runtime/venv
+runtime\venv\Scripts\pip install -r runtime\requirements.txt
 ```
 
 ### 打包
@@ -190,6 +249,8 @@ python build.py
 ```
 
 输出: `dist/RTT-Assistant vx.x.x/`
+
+打包后整个文件夹可复制到其他电脑直接运行，无需安装 Python。
 
 ## 许可证
 
