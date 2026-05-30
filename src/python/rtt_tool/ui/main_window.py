@@ -47,12 +47,18 @@ DARK_STYLESHEET = """
 QGroupBox { border: 1px solid #555; margin-top: 1ex; font-weight: bold; }
 QGroupBox::title { color: #e0e0e0; subcontrol-origin: margin; left: 10px; padding: 0 6px; }
 QTextEdit, QLineEdit, QPlainTextEdit { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
+QTextEdit:disabled, QLineEdit:disabled, QPlainTextEdit:disabled { background-color: #252525; color: #666; border: 1px dashed #444; }
 QComboBox { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; padding-right: 16px; min-width: 60px; }
+QComboBox:disabled { background-color: #2a2a2a; color: #666; border: 1px dashed #444; }
 QComboBox QAbstractItemView { background-color: #3c3c3c; color: #e0e0e0; selection-background-color: #505050; }
-QPushButton { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; padding: 4px 8px; }
-QPushButton:hover { background-color: #505050; }
+QPushButton { background-color: #3c3c3c; color: #e0e0e0; border: 2px solid #666; border-radius: 3px; padding: 4px 8px; }
+QPushButton:hover { background-color: #505050; border-color: #888; }
+QPushButton:pressed { background-color: #2a2a2a; border-color: #444; padding-top: 5px; padding-bottom: 3px; }
+QPushButton:disabled { background-color: #2a2a2a; color: #666; border: 1px dashed #444; }
 QCheckBox { color: #e0e0e0; spacing: 4px; }
+QCheckBox:disabled { color: #666; }
 QSpinBox, QDoubleSpinBox { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; }
+QSpinBox:disabled, QDoubleSpinBox:disabled { background-color: #2a2a2a; color: #666; border: 1px dashed #444; }
 QStatusBar, QToolBar { background-color: #333; color: #e0e0e0; border: none; spacing: 4px; }
 QMenu { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; }
 QMenu::item:selected { background-color: #505050; }
@@ -65,7 +71,21 @@ QTableWidget::item { color: #e0e0e0; }
 QDialog { background-color: #2b2b2b; }
 QListWidget { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
 QRadioButton { color: #e0e0e0; }
+QRadioButton:disabled { color: #666; }
+QLabel:disabled { color: #666; }
+QToolButton { background-color: #3c3c3c; color: #e0e0e0; border: 2px solid #666; border-radius: 3px; padding: 4px 8px; }
+QToolButton:hover { background-color: #505050; border-color: #888; }
+QToolButton:pressed { background-color: #2a2a2a; border-color: #444; padding-top: 5px; padding-bottom: 3px; }
+QToolButton:disabled { background-color: #2a2a2a; color: #666; border: 1px dashed #444; }
 QGroupBox QWidget { background: transparent; }
+"""
+
+LIGHT_STYLESHEET = """
+QToolButton { background-color: #f0f0f0; color: #333; border: 2px solid #aaa; border-radius: 3px; padding: 4px 8px; }
+QToolButton:hover { background-color: #e0e0e0; border-color: #888; }
+QToolButton:pressed { background-color: #d0d0d0; border-color: #666; padding-top: 5px; padding-bottom: 3px; }
+QToolButton:disabled { background-color: #f5f5f5; color: #bbb; border: 1px dashed #ccc; }
+QLabel:disabled { color: #bbb; }
 """
 
 
@@ -157,6 +177,18 @@ class MainWindow(QMainWindow):
         self._channel_log_handles = {}
 
         self._max_display_lines = 1000
+        
+        self._log_throttle_enabled = True
+        self._log_throttle_interval_ms = 50
+        self._log_throttle_max_buffer_bytes = 65536
+        self._pending_text = ''
+        self._pending_signal_count = 0
+        self._diagnostic_log_enabled = True
+        self._log_manage_dialog = None
+        from PyQt5.QtCore import QTimer
+        self._log_throttle_timer = QTimer(self)
+        self._log_throttle_timer.setInterval(self._log_throttle_interval_ms)
+        self._log_throttle_timer.timeout.connect(self._flush_pending_log_text)
         
         try:
             self.data_log_handle = open(self.data_log_file, 'a', encoding='utf-8')
@@ -270,6 +302,7 @@ class MainWindow(QMainWindow):
         """创建工具栏"""
         toolbar = QToolBar("工具栏")
         self.addToolBar(toolbar)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         
         # 禁用右键菜单
         toolbar.setContextMenuPolicy(Qt.PreventContextMenu)
@@ -476,6 +509,10 @@ class MainWindow(QMainWindow):
         data_log_action.triggered.connect(self._on_open_data_log_folder)
         log_menu.addAction(data_log_action)
         
+        log_manage_action = QAction("日志管理", self)
+        log_manage_action.triggered.connect(self._on_log_manage_clicked)
+        log_menu.addAction(log_manage_action)
+        
         # 添加日志菜单按钮
         log_button = QPushButton("日志")
         log_button.setMenu(log_menu)
@@ -614,7 +651,7 @@ class MainWindow(QMainWindow):
         app = QApp.instance()
         if app is not None:
             app.setProperty('_dark_theme', dark)
-            app.setStyleSheet(DARK_STYLESHEET if dark else "")
+            app.setStyleSheet(DARK_STYLESHEET if dark else LIGHT_STYLESHEET)
             _filter = app.property('_dark_title_bar_filter')
             if _filter:
                 _filter.set_dark(dark)
@@ -965,8 +1002,6 @@ class MainWindow(QMainWindow):
             remaining = text[last_end:]
             cursor.setCharFormat(current_format)
             cursor.insertText(remaining)
-        
-        self.receive_text.moveCursor(QTextCursor.End)
     
     def _apply_keyword_highlight(self, text, cursor):
         """
@@ -998,13 +1033,10 @@ class MainWindow(QMainWindow):
                 
                 pos = idx + len(keyword)
     
-    def append_receive_data(self, text):
-        """
-        追加接收数据
-        
-        Args:
-            text: 要追加的文本
-        """
+    def _direct_insert_text(self, text):
+        scrollbar = self.receive_text.verticalScrollBar()
+        at_bottom = scrollbar.value() >= scrollbar.maximum() - 2
+
         ansi_enabled = hasattr(self, 'ansi_color_action') and self.ansi_color_action.isChecked()
         keyword_enabled = hasattr(self, 'keyword_highlight_action') and self.keyword_highlight_action.isChecked()
         keyword_rules = getattr(self, '_keyword_rules', {}) if keyword_enabled else {}
@@ -1013,9 +1045,9 @@ class MainWindow(QMainWindow):
         if ansi_enabled and has_ansi:
             self._parse_ansi_and_insert(text)
         elif keyword_rules:
-            self.receive_text.moveCursor(QTextCursor.End)
-            self.receive_text.insertPlainText(text)
-            self.receive_text.moveCursor(QTextCursor.End)
+            cursor = QTextCursor(self.receive_text.document())
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertText(text)
             
             for keyword, color in keyword_rules.items():
                 if keyword in text:
@@ -1023,27 +1055,24 @@ class MainWindow(QMainWindow):
                     fmt = QTextCharFormat()
                     fmt.setForeground(QColor(color))
                     doc = self.receive_text.document()
-                    cursor = QTextCursor(doc)
-                    cursor.movePosition(QTextCursor.End)
-                    end_pos = cursor.position()
+                    search_cursor = QTextCursor(doc)
+                    search_cursor.movePosition(QTextCursor.End)
+                    end_pos = search_cursor.position()
                     search_pos = max(0, end_pos - len(text) - len(keyword))
                     
-                    cursor.setPosition(search_pos)
+                    search_cursor.setPosition(search_pos)
                     while True:
-                        found = doc.find(keyword, cursor)
+                        found = doc.find(keyword, search_cursor)
                         if found.isNull() or found.selectionStart() < search_pos or found.selectionEnd() > end_pos:
                             break
                         found.mergeCharFormat(fmt)
-                        cursor = QTextCursor(doc)
-                        cursor.setPosition(found.selectionEnd())
-            
-            self.receive_text.moveCursor(QTextCursor.End)
+                        search_cursor = QTextCursor(doc)
+                        search_cursor.setPosition(found.selectionEnd())
         else:
-            self.receive_text.moveCursor(QTextCursor.End)
-            self.receive_text.insertPlainText(text)
-            self.receive_text.moveCursor(QTextCursor.End)
+            cursor = QTextCursor(self.receive_text.document())
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertText(text)
         
-        # 限制显示行数，超过则删除最旧的行
         doc = self.receive_text.document()
         if doc.blockCount() > self._max_display_lines:
             cursor = QTextCursor(doc)
@@ -1052,8 +1081,30 @@ class MainWindow(QMainWindow):
             for _ in range(lines_to_remove):
                 cursor.movePosition(QTextCursor.NextBlock, QTextCursor.KeepAnchor)
             cursor.removeSelectedText()
+
+        if at_bottom:
+            self.receive_text.verticalScrollBar().setValue(self.receive_text.verticalScrollBar().maximum())
+
+    def _flush_pending_log_text(self):
+        if not self._pending_text:
+            return
+        accumulated = self._pending_text
+        self._pending_text = ''
+        signal_count = self._pending_signal_count
+        self._pending_signal_count = 0
+        self._direct_insert_text(accumulated)
+        if getattr(self, '_diagnostic_log_enabled', False):
+            import logging
+            logging.getLogger(__name__).debug(f"UI flush: {signal_count} signals merged, {len(accumulated)}B")
+
+    def append_receive_data(self, text):
+        """
+        追加接收数据（支持节流模式）
         
-        # 保存到数据日志文件(去除ANSI码)
+        Args:
+            text: 要追加的文本
+        """
+        has_ansi = '\x1B' in text if text else False
         if self.data_log_handle:
             try:
                 from datetime import datetime
@@ -1064,6 +1115,16 @@ class MainWindow(QMainWindow):
                 self.data_log_handle.flush()
             except Exception:
                 pass
+
+        if getattr(self, '_log_throttle_enabled', False):
+            self._pending_text += text
+            self._pending_signal_count += 1
+            if len(self._pending_text.encode('utf-8', errors='replace')) > self._log_throttle_max_buffer_bytes:
+                self._flush_pending_log_text()
+            if not self._log_throttle_timer.isActive():
+                self._log_throttle_timer.start()
+        else:
+            self._direct_insert_text(text)
     
     def set_connected(self, connected):
         """
@@ -1190,10 +1251,19 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
+        if hasattr(self, '_log_throttle_timer'):
+            self._log_throttle_timer.stop()
+        if hasattr(self, '_flush_pending_log_text'):
+            self._flush_pending_log_text()
         # 关闭数据日志文件
         if self.data_log_handle:
             try:
                 self.data_log_handle.close()
+            except Exception:
+                pass
+        for ch, handle in getattr(self, '_channel_log_handles', {}).items():
+            try:
+                handle.close()
             except Exception:
                 pass
         event.accept()
@@ -1251,6 +1321,17 @@ class MainWindow(QMainWindow):
         
         # 打开文件夹
         os.startfile(folder)
+    
+    def _on_log_manage_clicked(self):
+        """打开诊断日志管理窗口"""
+        if self._log_manage_dialog is None:
+            from ..service.diag_log_registry import DiagLogRegistry
+            from .log_manage_dialog import LogManageDialog
+            config_service = getattr(self, 'config_service', None)
+            registry = DiagLogRegistry(config_service=config_service)
+            self._log_manage_dialog = LogManageDialog(registry, parent=self)
+        self._log_manage_dialog.show()
+        self._log_manage_dialog.raise_()
     
     def _update_probe_info(self):
         """更新状态栏探针信息（支持J-Link和PyOCD）"""

@@ -464,20 +464,24 @@ class PyOCDBackend(DebuggerBackend):
                 break
 
     def _read_upchannel(self, ch, channel: int, buffer_size: int) -> bytes:
-        """读取上行通道数据，兼容不同 PyOCD 版本的 read() 签名。"""
-        try:
-            return ch.read(length=buffer_size)
-        except TypeError:
-            pass
+        """读取上行通道数据，优先使用原生读取模式(ch.read()无参数)一次读完所有可用数据。
+        
+        原生读取模式是pyocd rtt命令不丢数据的核心机制(GenericRTTUpChannel.read()无参数)。
+        仅当pyocd版本不支持无参数调用(TypeError)时回退到受限读取模式ch.read(length=buffer_size)。
+        """
         try:
             data = ch.read()
-        except Exception as inner_e:
-            self._diag_log(f'rtt_read: ch.read() (no-arg) FAILED: {type(inner_e).__name__}: {inner_e}')
+        except TypeError:
+            fallback_size = max(buffer_size, 20480)
+            try:
+                data = ch.read(length=fallback_size)
+            except Exception as fallback_e:
+                self._diag_log(f'rtt_read: ch.read(length={fallback_size}) fallback FAILED: {type(fallback_e).__name__}: {fallback_e}')
+                return b''
+        except Exception as e:
+            self._diag_log(f'rtt_read: ch.read() (no-arg) FAILED: {type(e).__name__}: {e}')
             return b''
-        if data:
-            if len(data) > buffer_size:
-                data = data[:buffer_size]
-        else:
+        if not data:
             if (self._diag_counter % 100) == 0:
                 ch_type = type(ch).__name__
                 try:
@@ -488,7 +492,7 @@ class PyOCDBackend(DebuggerBackend):
             self._diag_counter += 1
         return data
 
-    def rtt_read(self, channel: int = 0, buffer_size: int = 1024) -> bytes:
+    def rtt_read(self, channel: int = 0, buffer_size: int = 4096) -> bytes:
         if not self._rtt_initialized or self._rtt_cb is None:
             raise RuntimeError("RTT 未初始化")
         try:
@@ -503,7 +507,7 @@ class PyOCDBackend(DebuggerBackend):
             self._diag_log(f'rtt_read(ch={channel}, buf={buffer_size}) FAILED: {type(e).__name__}: {e}')
             return b''
 
-    def rtt_read_all(self, channels: list, buffer_size: int = 1024) -> dict:
+    def rtt_read_all(self, channels: list, buffer_size: int = 4096) -> dict:
         """一次poll控制块，批量读取多个通道数据。返回 {channel: bytes}。"""
         if not self._rtt_initialized or self._rtt_cb is None:
             raise RuntimeError("RTT 未初始化")

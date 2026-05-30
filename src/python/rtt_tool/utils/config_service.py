@@ -71,6 +71,11 @@ class ConfigService:
         "waveform_channels": [1],
         "monitor_interval": 100,
         "monitored_variables": [],
+        "ring_buffer_size": 65536,
+        "ring_buffer_full_log_level": "DEBUG",
+        "log_level.rtt_system": "INFO",
+        "log_level.pyocd_diag": "INFO",
+        "log_level.rtt_debug": "INFO",
     }
     
     def __init__(self, config_file=None):

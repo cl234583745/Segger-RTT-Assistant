@@ -532,7 +532,7 @@ class JLinkRTTWrapper:
             self.rtt_initialized = False
             raise RuntimeError(f"RTT初始化失败: {e}")
     
-    def read_rtt(self, buffer_size=1024, channel=0):
+    def read_rtt(self, buffer_size=4096, channel=0):
         """
         从RTT读取数据
         

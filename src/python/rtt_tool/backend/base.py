@@ -44,7 +44,7 @@ class DebuggerBackend(ABC):
         pass
 
     @abstractmethod
-    def rtt_read(self, channel: int = 0, buffer_size: int = 1024) -> bytes:
+    def rtt_read(self, channel: int = 0, buffer_size: int = 4096) -> bytes:
         """从 RTT 通道读取数据。
 
         Args:
