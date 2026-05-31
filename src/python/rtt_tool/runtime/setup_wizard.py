@@ -12,6 +12,7 @@ from .dependency_manifest import (
     get_pip_install_list, get_all_dependencies, get_backend_size_mb,
 )
 from .dependency_checker import DependencyChecker, DependencyCheckReport
+from ..i18n import _ as i18n, language_changed as i18n_language_changed
 
 
 class DownloadWorker:
@@ -38,8 +39,8 @@ class DownloadWorker:
                 '--no-warn-script-location',
             ] + self._packages
 
-            self.progress.emit(f'执行: pip install --target {self._target_dir}')
-            self.progress.emit(f'包列表: {" ".join(self._packages)}')
+            self.progress.emit(i18n("setup.exec_pip_install").format(self._target_dir))
+            self.progress.emit(i18n("setup.package_list").format(" ".join(self._packages)))
 
             process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -52,11 +53,11 @@ class DownloadWorker:
 
             process.wait()
             if process.returncode == 0:
-                self.finished.emit(True, '所有Python依赖下载完成!')
+                self.finished.emit(True, i18n("setup.log_download_complete"))
             else:
-                self.finished.emit(False, f'下载失败 (返回码: {process.returncode})')
+                self.finished.emit(False, i18n("setup.log_download_failed").format(process.returncode))
         except Exception as e:
-            self.finished.emit(False, f'下载异常: {e}')
+            self.finished.emit(False, i18n("setup.log_download_error").format(e))
 
     @classmethod
     def create(cls, packages, target_dir):
@@ -85,25 +86,28 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
             self._selected_backends: List[BackendType] = []
             self._backend_checks = {}
             self._init_ui()
+            _sig = i18n_language_changed()
+            if _sig:
+                _sig.connect(self._on_language_changed)
 
         def _init_ui(self):
-            self.setWindowTitle('RTT Assistant - 首次启动 - 选择调试器后端')
+            self.setWindowTitle(i18n("setup.window_title"))
             self.setMinimumSize(720, 600)
             self.setModal(True)
 
             layout = QVBoxLayout(self)
 
-            title = QLabel('欢迎使用 RTT Assistant')
+            title = QLabel(i18n("setup.welcome"))
             title.setFont(QFont('Microsoft YaHei', 18, QFont.Bold))
             title.setAlignment(Qt.AlignCenter)
             layout.addWidget(title)
 
-            subtitle = QLabel('请选择您使用的调试器类型，将自动下载对应依赖到 runtime 目录')
+            subtitle = QLabel(i18n("setup.subtitle"))
             subtitle.setAlignment(Qt.AlignCenter)
             subtitle.setWordWrap(True)
             layout.addWidget(subtitle)
 
-            backend_group = QGroupBox('选择调试器后端 (可多选)')
+            backend_group = QGroupBox(i18n("setup.select_backend"))
             backend_layout = QGridLayout()
 
             col = 0
@@ -131,7 +135,7 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
             backend_group.setLayout(backend_layout)
             layout.addWidget(backend_group)
 
-            hint = QLabel('提示: DAP-Link 和 ST-Link 共享 PyOCD 核心 (~22MB)，同时勾选不会重复下载')
+            hint = QLabel(i18n("setup.dap_stlink_hint"))
             hint.setWordWrap(True)
             hint.setStyleSheet('color: #666; font-size: 11px;')
             layout.addWidget(hint)
@@ -141,7 +145,7 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
             scroll_widget = QWidget()
             scroll_layout = QVBoxLayout(scroll_widget)
 
-            status_group = QGroupBox('当前依赖状态')
+            status_group = QGroupBox(i18n("setup.dep_status"))
             status_layout = QVBoxLayout()
             for item in self._report.items:
                 if not item.is_available:
@@ -150,17 +154,17 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
                 else:
                     tag = '✓'
                     color = 'green'
-                req = '[必需]' if item.required else '[可选]'
+                req = i18n("setup.required") if item.required else i18n("setup.optional")
                 label = QLabel(f'<span style="color:{color}">{tag}</span> {req} <b>{item.name}</b>: {item.detail}')
                 status_layout.addWidget(label)
             status_group.setLayout(status_layout)
             scroll_layout.addWidget(status_group)
 
             info_label = QLabel(
-                f'依赖安装位置:\n'
-                f'  Python包: {RUNTIME_VENV_SITE_PACKAGES}\n'
-                f'  DLL文件:  {RUNTIME_DLL_DIR}\n'
-                f'  Pack文件: {RUNTIME_PACKS_DIR}'
+                f'{i18n("setup.dep_install_location")}\n'
+                f'  {i18n("setup.python_packages")} {RUNTIME_VENV_SITE_PACKAGES}\n'
+                f'  {i18n("setup.dll_files")}  {RUNTIME_DLL_DIR}\n'
+                f'  {i18n("setup.pack_files")} {RUNTIME_PACKS_DIR}'
             )
             info_label.setWordWrap(True)
             scroll_layout.addWidget(info_label)
@@ -180,21 +184,21 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
 
             btn_layout = QHBoxLayout()
 
-            self._btn_download = QPushButton('下载选中后端的依赖')
+            self._btn_download = QPushButton(i18n("setup.btn_download"))
             self._btn_download.setMinimumHeight(44)
             self._btn_download.setStyleSheet('QPushButton { background-color: #4CAF50; color: white; font-size: 14px; font-weight: bold; }')
             self._btn_download.clicked.connect(self._on_download)
             btn_layout.addWidget(self._btn_download)
 
-            self._btn_manual = QPushButton('手动配置说明')
+            self._btn_manual = QPushButton(i18n("setup.btn_manual"))
             self._btn_manual.clicked.connect(self._on_manual_setup)
             btn_layout.addWidget(self._btn_manual)
 
-            self._btn_refresh = QPushButton('刷新检测')
+            self._btn_refresh = QPushButton(i18n("setup.btn_refresh"))
             self._btn_refresh.clicked.connect(self._on_refresh)
             btn_layout.addWidget(self._btn_refresh)
 
-            self._btn_continue = QPushButton('继续启动')
+            self._btn_continue = QPushButton(i18n("setup.btn_continue"))
             self._btn_continue.setMinimumHeight(44)
             self._btn_continue.setEnabled(self._report.all_required_ok)
             self._btn_continue.clicked.connect(self._on_continue)
@@ -208,18 +212,18 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
         def _on_download(self):
             selected = self._get_selected_backends()
             if not selected:
-                QMessageBox.warning(self, '提示', '请至少选择一个调试器后端')
+                QMessageBox.warning(self, i18n("dialog.hint_title"), i18n("setup.warn_select_backend"))
                 return
 
             self._selected_backends = selected
             packages = get_pip_install_list(selected)
             if not packages:
-                QMessageBox.information(self, '提示', '没有需要下载的Python包')
+                QMessageBox.information(self, i18n("dialog.hint_title"), i18n("setup.info_no_packages"))
                 return
 
             self._log_text.setVisible(True)
-            self._log_text.append(f'选中后端: {", ".join(BACKEND_INFO[bt]["name"] for bt in selected)}')
-            self._log_text.append(f'将下载 {len(packages)} 个Python包到 runtime/python/ ...')
+            self._log_text.append(i18n("setup.log_selected_backends").format(", ".join(BACKEND_INFO[bt]["name"] for bt in selected)))
+            self._log_text.append(i18n("setup.log_will_download").format(len(packages)))
 
             self._progress_bar.setVisible(True)
             self._progress_bar.setRange(0, 0)
@@ -244,7 +248,7 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
                 self._copy_libusb_dll()
                 self._on_refresh()
             else:
-                QMessageBox.warning(self, '下载失败', msg)
+                QMessageBox.warning(self, i18n("dialog.download_failed"), msg)
 
         def _copy_libusb_dll(self):
             try:
@@ -254,35 +258,35 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
                     import shutil
                     dst = os.path.join(RUNTIME_DLL_DIR, 'libusb-1.0.dll')
                     shutil.copy2(src, dst)
-                    self._log_text.append(f'已复制 libusb-1.0.dll -> {dst}')
+                    self._log_text.append(i18n("setup.log_copied_dll").format(dst))
             except Exception as e:
-                self._log_text.append(f'复制libusb失败(可忽略): {e}')
+                self._log_text.append(i18n("setup.log_copy_dll_failed").format(e))
 
         def _on_manual_setup(self):
             selected = self._get_selected_backends()
-            backend_names = ', '.join(BACKEND_INFO[bt]['name'] for bt in selected) if selected else '(请先勾选)'
+            backend_names = ', '.join(BACKEND_INFO[bt]['name'] for bt in selected) if selected else i18n("setup.no_backend_selected")
 
             jlink_hint = ''
             if BackendType.JLINK in selected:
                 jlink_hint = (
-                    '\n\n[J-Link] DLL文件为必须:\n'
-                    f'  从SEGGER官网下载并安装JLink软件，将 JLink_x64.dll 复制到:\n'
+                    f'\n\n{i18n("setup.manual_jlink_dll")}\n'
+                    f'  {i18n("setup.manual_jlink_dll_hint")}\n'
                     f'  {RUNTIME_DLL_DIR}\\JLink_x64.dll'
                 )
 
             pack_hint = ''
             if BackendType.DAPLINK in selected:
                 pack_hint = (
-                    '\n\n[DAP-Link] CMSIS Pack文件(可选):\n'
-                    f'  将 .pack 文件复制到 {RUNTIME_PACKS_DIR}\\'
+                    f'\n\n{i18n("setup.manual_dap_pack")}\n'
+                    f'  {i18n("setup.manual_dap_pack_hint").format(RUNTIME_PACKS_DIR + "\\")}'
                 )
 
-            QMessageBox.information(self, '手动配置依赖',
-                f'已选后端: {backend_names}\n\n'
-                f'Python包安装命令:\n'
-                f'  pip install到venv: {RUNTIME_VENV_DIR}\n'
+            QMessageBox.information(self, i18n("setup.manual_config_title"),
+                f'{i18n("setup.manual_selected_backends").format(backend_names)}\n\n'
+                f'{i18n("setup.manual_pip_command")}\n'
+                f'  {i18n("setup.manual_pip_to_venv").format(RUNTIME_VENV_DIR)}\n'
                 f'{jlink_hint}{pack_hint}\n\n'
-                '配置完成后点击"刷新检测"'
+                f'{i18n("setup.manual_after_config")}'
             )
 
         def _on_refresh(self):
@@ -291,10 +295,21 @@ def show_setup_wizard(report: DependencyCheckReport) -> tuple:
             )
             if self._report.all_required_ok:
                 self._btn_continue.setEnabled(True)
-                QMessageBox.information(self, '检测完成', '所有必需依赖已就绪，可以继续启动!')
+                QMessageBox.information(self, i18n("setup.detect_complete"), i18n("setup.all_deps_ready"))
             else:
                 missing = [s.name for s in self._report.missing_required]
-                QMessageBox.warning(self, '检测完成', f'仍缺少必需依赖:\n{", ".join(missing)}')
+                QMessageBox.warning(self, i18n("setup.detect_complete"), i18n("setup.still_missing").format(", ".join(missing)))
+
+        def _on_language_changed(self, lang):
+            self.setWindowTitle(i18n("setup.window_title"))
+            if hasattr(self, '_btn_download'):
+                self._btn_download.setText(i18n("setup.btn_download"))
+            if hasattr(self, '_btn_manual'):
+                self._btn_manual.setText(i18n("setup.btn_manual"))
+            if hasattr(self, '_btn_refresh'):
+                self._btn_refresh.setText(i18n("setup.btn_refresh"))
+            if hasattr(self, '_btn_continue'):
+                self._btn_continue.setText(i18n("setup.btn_continue"))
 
         def _on_continue(self):
             self._deps_ready = True

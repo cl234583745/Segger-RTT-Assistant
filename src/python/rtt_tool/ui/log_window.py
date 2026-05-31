@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QTextCursor, QColor
+from ..i18n import _ as i18n, language_changed as i18n_language_changed
 import re
 
 _LOG_LINE_RE = re.compile(r'\[(\d{2}:\d{2}:\d{2}\.\d{3})\] \[(\w+)\] (.+)')
@@ -53,7 +54,7 @@ class LogWindow(QWidget):
     def init_ui(self):
         """初始化UI"""
         # 设置窗口属性
-        self.setWindowTitle('系统日志')
+        self.setWindowTitle(i18n("dialog.system_log"))
         self.setMinimumSize(600, 400)
         
         # 主布局
@@ -63,21 +64,21 @@ class LogWindow(QWidget):
         toolbar_layout = QHBoxLayout()
         
         # 日志类型过滤
-        toolbar_layout.addWidget(QLabel('日志类型:'))
+        toolbar_layout.addWidget(QLabel(i18n("label.log_type")))
         self.type_combo = QComboBox()
-        self.type_combo.addItems(['全部', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'SUCCESS'])
+        self.type_combo.addItems([i18n("combo.log_all"), "DEBUG", "INFO", "WARNING", "ERROR", "SUCCESS"])
         self.type_combo.currentTextChanged.connect(self.on_filter_changed)
         toolbar_layout.addWidget(self.type_combo)
         
         toolbar_layout.addStretch()
         
         # 清空按钮
-        self.clear_btn = QPushButton('清空')
+        self.clear_btn = QPushButton(i18n("btn.clear"))
         self.clear_btn.clicked.connect(self.on_clear_clicked)
         toolbar_layout.addWidget(self.clear_btn)
         
         # 打开日志文件按钮
-        self.open_file_btn = QPushButton('打开日志文件')
+        self.open_file_btn = QPushButton(i18n("btn.open_log_file"))
         self.open_file_btn.clicked.connect(self._on_open_log_file)
         toolbar_layout.addWidget(self.open_file_btn)
         
@@ -95,6 +96,16 @@ class LogWindow(QWidget):
         layout.addWidget(self.log_text)
         
         self.setLayout(layout)
+        
+        _sig = i18n_language_changed()
+        if _sig:
+            _sig.connect(self._on_language_changed)
+    
+    def _on_language_changed(self, lang):
+        self.setWindowTitle(i18n("dialog.system_log"))
+        self.type_combo.setItemText(0, i18n("combo.log_all"))
+        self.clear_btn.setText(i18n("btn.clear"))
+        self.open_file_btn.setText(i18n("btn.open_log_file"))
     
     def showEvent(self, event):
         """窗口显示事件"""
@@ -158,7 +169,7 @@ class LogWindow(QWidget):
                 timestamp, log_type, message = match.groups()
                 
                 # 根据过滤条件显示
-                if filter_type == '全部' or filter_type == log_type:
+                if filter_type == i18n("combo.log_all") or filter_type == log_type:
                     self._append_log(timestamp, log_type, message)
             else:
                 # 不是标准日志格式,直接显示(如分隔线)
@@ -263,9 +274,9 @@ class LogWindow(QWidget):
         # 选择保存文件
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "导出日志",
+            i18n("dialog.export_log"),
             "rtt_log.txt",
-            "文本文件 (*.txt);;所有文件 (*)"
+            i18n("filter.text_file") + " (*.txt);;" + i18n("filter.all_file") + " (*)"
         )
         
         if file_path:

@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QComboBox, QDialogButtonBox, QLabel, QPushButton
 )
 from PyQt5.QtCore import Qt, pyqtSignal
+from ..i18n import _ as i18n
 from datetime import datetime
 
 
@@ -26,18 +27,18 @@ class VariableMonitorWidget(QWidget):
         toolbar = QToolBar()
         toolbar.setMovable(False)
 
-        add_action = QPushButton("添加变量")
+        add_action = QPushButton(i18n("btn.add_variable"))
         add_action.clicked.connect(self._on_add_variable)
         toolbar.addWidget(add_action)
 
-        remove_action = QPushButton("删除变量")
+        remove_action = QPushButton(i18n("btn.remove_variable"))
         remove_action.clicked.connect(self._on_remove_variable)
         toolbar.addWidget(remove_action)
 
         layout.addWidget(toolbar)
 
         self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(['名称', '地址', '类型', '当前值', '更新时间'])
+        self._table.setHorizontalHeaderLabels([i18n("header.var_name"), i18n("header.var_address"), i18n("header.var_type"), i18n("header.var_value"), i18n("header.var_time")])
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -104,18 +105,18 @@ class AddVariableDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("添加监视变量")
-        layout = QFormLayout(self)
+        self.setWindowTitle(i18n("dialog.add_monitor_var"))
 
         self.name_text = QLineEdit()
-        layout.addRow("名称:", self.name_text)
+        layout.addRow(i18n("label.name"), self.name_text)
 
         self.address_text = QLineEdit()
-        self.address_text.setPlaceholderText("如: 0x20001234")
-        layout.addRow("地址:", self.address_text)
+        self.address_text.setPlaceholderText(i18n("placeholder.var_address"))
+        layout.addRow(i18n("label.address"), self.address_text)
 
         self.type_combo = QComboBox()
         self.type_combo.addItems(VariableMonitorWidget.VAR_TYPES)
-        layout.addRow("类型:", self.type_combo)
+        layout.addRow(i18n("label.type"), self.type_combo)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)

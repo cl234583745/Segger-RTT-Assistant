@@ -30,8 +30,10 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication as QApp
+from ..i18n import _ as i18n
 from ..utils.resource_utils import get_external_file, get_exe_dir
 from ..utils.device_info_service import DeviceInfoService
+from .firmware_path_panel import FirmwarePathPanel
 
 
 class _ProbeDetectThread(QThread):
@@ -61,7 +63,7 @@ class ConnectionDialog(QDialog):
                  probe_name="", probe_backend="", probe_serial="",
                  interface="SWD", speed=4000):
         super().__init__(parent)
-        self.setWindowTitle("连接配置")
+        self.setWindowTitle(i18n("dialog.connection_config"))
         self.setModal(True)
         self.resize(500, 500)
 
@@ -130,6 +132,10 @@ class ConnectionDialog(QDialog):
         interface_group = self._create_interface_group()
         layout.addWidget(interface_group)
         
+        # 固件文件选择区域（在RTT控制块上方）
+        self.firmware_path_panel = FirmwarePathPanel()
+        layout.addWidget(self.firmware_path_panel)
+        
         rtt_group = self._create_rtt_group()
         layout.addWidget(rtt_group)
         
@@ -139,6 +145,10 @@ class ConnectionDialog(QDialog):
         
         # 所有UI控件已创建完毕，连接探针选择信号
         self.probe_list.currentItemChanged.connect(self._on_probe_selection_changed)
+        
+        # 固件路径与map路径联动
+        self.firmware_path_panel.active_path_changed.connect(self._on_firmware_path_for_linkage)
+        self.map_path_edit.textChanged.connect(self._on_map_path_for_linkage)
         
         button_layout = self._create_buttons()
         layout.addLayout(button_layout)
@@ -172,18 +182,18 @@ class ConnectionDialog(QDialog):
 
     def _create_debugger_group(self):
         """创建调试器选择组"""
-        group = QGroupBox("步骤1: 调试器选择")
+        group = QGroupBox(i18n("label.step1_debugger"))
         layout = QHBoxLayout(group)
         
-        layout.addWidget(QLabel("已连接探针:"))
+        layout.addWidget(QLabel(i18n("label.connected_probes")))
         self.probe_list = QListWidget()
         self.probe_list.setFixedHeight(100)
         self.probe_list.setSelectionMode(QAbstractItemView.SingleSelection)
         layout.addWidget(self.probe_list, 1)
         
         btn_layout = QVBoxLayout()
-        self._refresh_btn = QPushButton("刷新")
-        self._refresh_btn.setToolTip("重新探测调试器")
+        self._refresh_btn = QPushButton(i18n("btn.refresh"))
+        self._refresh_btn.setToolTip(i18n("tooltip.refresh_debugger"))
         self._refresh_btn.clicked.connect(self._start_probe_detect)
         btn_layout.addWidget(self._refresh_btn)
         btn_layout.addStretch()
@@ -211,18 +221,18 @@ class ConnectionDialog(QDialog):
             self.probe_list.addItem(item)
             self.probe_list.setCurrentItem(item)
         else:
-            self.probe_list.addItem("-- 请点击「刷新」探测探针 --")
+            self.probe_list.addItem(i18n("error.please_click_refresh"))
     
     def _start_probe_detect(self):
         """启动后台探测"""
         if self._debugger_manager is None:
             self.probe_list.clear()
-            self.probe_list.addItem("-- 调试器管理器未初始化 --")
+            self.probe_list.addItem(i18n("error.debugger_not_init"))
             return
         
         self._refresh_btn.setEnabled(False)
         self.probe_list.clear()
-        self.probe_list.addItem("正在探测...")
+        self.probe_list.addItem(i18n("error.detecting"))
         
         self._detected_probes = []
         
@@ -237,7 +247,7 @@ class ConnectionDialog(QDialog):
         self.probe_list.clear()
 
         if not probes:
-            self.probe_list.addItem("-- 未探测到探针 --")
+            self.probe_list.addItem(i18n("error.probe_not_found"))
             if self.log_service:
                 self.log_service.warning("探测结果: 未发现任何探针")
             self._update_device_ui_for_backend('jlink')
@@ -267,10 +277,10 @@ class ConnectionDialog(QDialog):
         """后台探测出错"""
         self._refresh_btn.setEnabled(True)
         self.probe_list.clear()
-        self.probe_list.addItem("-- 探测失败 --")
+        self.probe_list.addItem(i18n("error.probe_detect_error"))
         if self.log_service:
             self.log_service.error(f"探测探针失败: {error_msg}")
-        QMessageBox.warning(self, "探测失败", f"错误详情:\n{error_msg}")
+        QMessageBox.warning(self, i18n("dialog.probe_detect_failed"), i18n("error.probe_detect_detail").format(error_msg))
 
     def _on_probe_selection_changed(self, current, previous):
         """探针选择变化"""
@@ -382,7 +392,7 @@ class ConnectionDialog(QDialog):
         user_input_before = self.pyocd_target_combo.currentText().strip()
         self.pyocd_update_btn.setEnabled(False)
         self.pyocd_target_combo.clear()
-        self.pyocd_target_combo.addItem("正在更新...")
+        self.pyocd_target_combo.addItem(i18n("error.updating"))
         self.pyocd_target_combo.setEnabled(False)
 
         class _RefreshWorker(QThread):
@@ -400,8 +410,8 @@ class ConnectionDialog(QDialog):
                     self_inner.finished.emit(False, [])
 
         from PyQt5.QtWidgets import QProgressDialog
-        progress = QProgressDialog("正在更新目标索引...", None, 0, 0, self)
-        progress.setWindowTitle("更新 PyOCD 目标")
+        progress = QProgressDialog(i18n("error.updating_target_index"), None, 0, 0, self)
+        progress.setWindowTitle(i18n("dialog.update_pyocd_target"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.show()
@@ -436,8 +446,8 @@ class ConnectionDialog(QDialog):
         from ..runtime.pyocd_target_index import install_pack_for_target, refresh_index, RUNTIME_PACKS_DIR
 
         target, ok = QInputDialog.getText(
-            self, '下载 CMSIS Pack',
-            '输入芯片型号（如 STM32U575、R7FA6M5AF）：',
+            self, i18n("dialog.download_cmsis_pack"),
+            i18n("dialog.input_chip_model"),
             text=self.pyocd_target_combo.currentText().strip(),
         )
         if not ok or not target.strip():
@@ -445,12 +455,12 @@ class ConnectionDialog(QDialog):
         target = target.strip()
 
         dlg = QDialog(self)
-        dlg.setWindowTitle('下载 Pack')
+        dlg.setWindowTitle(i18n("dialog.download_pack"))
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setFixedSize(520, 200)
         dlg_layout = QVBoxLayout(dlg)
 
-        status_label = QLabel(f'正在查找 {target} 的 Pack...')
+        status_label = QLabel(i18n("label.finding_pack").format(target))
         dlg_layout.addWidget(status_label)
 
         url_label = QLabel()
@@ -464,7 +474,7 @@ class ConnectionDialog(QDialog):
         dlg_layout.addWidget(progress_bar)
 
         from ..runtime.path_config import RUNTIME_PACKS_DIR as _pack_dir
-        hint_label = QLabel(f'也可手动下载 .pack 文件复制到:\n{_pack_dir}')
+        hint_label = QLabel(i18n("label.also_manual_download").format(_pack_dir))
         hint_label.setStyleSheet('color: #666; font-size: 11px;')
         hint_label.setWordWrap(True)
         dlg_layout.addWidget(hint_label)
@@ -502,23 +512,23 @@ class ConnectionDialog(QDialog):
             self._pyocd_targets_loaded = True
             if self.last_pyocd_target:
                 self.pyocd_target_combo.setCurrentText(self.last_pyocd_target)
-            QMessageBox.information(self, '下载成功', f'{target} 的 Pack 已安装并刷新目标列表。')
+            QMessageBox.information(self, i18n("dialog.download_success"), i18n("label.pack_installed").format(target))
         else:
             from ..runtime.path_config import RUNTIME_PACKS_DIR
             from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton, QHBoxLayout
             pack_dir = os.path.abspath(RUNTIME_PACKS_DIR)
             dlg = QDialog(self)
-            dlg.setWindowTitle('下载失败')
+            dlg.setWindowTitle(i18n("dialog.download_failed"))
             dlg.setFixedSize(420, 160)
             layout = QVBoxLayout(dlg)
             layout.addWidget(QLabel(f'{msg}'))
-            layout.addWidget(QLabel('请手动下载CMSIS Pack并复制到以下目录：'))
+            layout.addWidget(QLabel(i18n("label.manually_download_pack")))
             dir_label = QLabel(f'<b>{pack_dir}</b>')
             dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             layout.addWidget(dir_label)
             btn_layout = QHBoxLayout()
             btn_layout.addStretch()
-            ok_btn = QPushButton('确定')
+            ok_btn = QPushButton(i18n("btn.ok"))
             ok_btn.clicked.connect(dlg.accept)
             btn_layout.addWidget(ok_btn)
             btn_layout.addStretch()
@@ -527,7 +537,7 @@ class ConnectionDialog(QDialog):
     
     def _create_connection_group(self):
         """创建连接方式选择组"""
-        group = QGroupBox("步骤2: 连接方式")
+        group = QGroupBox(i18n("label.step2_connection"))
         layout = QHBoxLayout(group)
         
         self.usb_radio = QRadioButton("USB")
@@ -538,7 +548,7 @@ class ConnectionDialog(QDialog):
         layout.addWidget(self.sn_checkbox)
         
         self.sn_edit = QLineEdit()
-        self.sn_edit.setPlaceholderText("序列号或昵称")
+        self.sn_edit.setPlaceholderText(i18n("placeholder.serial_number"))
         self.sn_edit.setEnabled(False)
         layout.addWidget(self.sn_edit)
         
@@ -546,7 +556,7 @@ class ConnectionDialog(QDialog):
         layout.addWidget(self.tcp_radio)
         
         self.ip_edit = QLineEdit()
-        self.ip_edit.setPlaceholderText("IP地址")
+        self.ip_edit.setPlaceholderText(i18n("placeholder.ip_address"))
         self.ip_edit.setEnabled(False)
         layout.addWidget(self.ip_edit)
         
@@ -561,12 +571,12 @@ class ConnectionDialog(QDialog):
     
     def _create_device_group(self):
         """创建目标设备选择组"""
-        group = QGroupBox("步骤3: 目标设备")
+        group = QGroupBox(i18n("label.step3_device"))
         layout = QVBoxLayout(group)
 
         # J-Link 目标设备行
         jlink_layout = QHBoxLayout()
-        self.jlink_device_label = QLabel("J-Link 目标设备:")
+        self.jlink_device_label = QLabel(i18n("label.jlink_device"))
         jlink_layout.addWidget(self.jlink_device_label)
 
         self.device_combo = QComboBox()
@@ -576,12 +586,12 @@ class ConnectionDialog(QDialog):
         jlink_layout.addWidget(self.device_combo)
 
         self.browse_btn = QPushButton("...")
-        self.browse_btn.setToolTip("筛选设备型号")
+        self.browse_btn.setToolTip(i18n("tooltip.filter_device"))
         self.browse_btn.clicked.connect(self._on_browse_device)
         jlink_layout.addWidget(self.browse_btn)
 
-        self.update_btn = QPushButton("更新")
-        self.update_btn.setToolTip("从J-Link DLL更新设备列表到devices.txt")
+        self.update_btn = QPushButton(i18n("btn.update"))
+        self.update_btn.setToolTip(i18n("tooltip.update_device_list"))
         self.update_btn.clicked.connect(self._on_update_devices)
         jlink_layout.addWidget(self.update_btn)
 
@@ -590,13 +600,13 @@ class ConnectionDialog(QDialog):
 
         # PyOCD 目标设备行
         pyocd_layout = QHBoxLayout()
-        self.pyocd_device_label = QLabel("其他Link 目标设备:")
+        self.pyocd_device_label = QLabel(i18n("label.pyocd_device"))
         pyocd_layout.addWidget(self.pyocd_device_label)
 
         self.pyocd_target_combo = QComboBox()
         self.pyocd_target_combo.setEditable(True)
         self.pyocd_target_combo.setMinimumWidth(200)
-        self.pyocd_target_combo.setToolTip("PyOCD目标类型名称")
+        self.pyocd_target_combo.setToolTip(i18n("tooltip.pyocd_target_name"))
         self._pyocd_targets_loaded = False
         self._pyocd_target_entries = []
         if self.last_pyocd_target:
@@ -604,17 +614,17 @@ class ConnectionDialog(QDialog):
         pyocd_layout.addWidget(self.pyocd_target_combo)
 
         self.pyocd_browse_btn = QPushButton("...")
-        self.pyocd_browse_btn.setToolTip("筛选PyOCD目标设备")
+        self.pyocd_browse_btn.setToolTip(i18n("tooltip.filter_pyocd_target"))
         self.pyocd_browse_btn.clicked.connect(self._on_browse_pyocd_target)
         pyocd_layout.addWidget(self.pyocd_browse_btn)
 
-        self.pyocd_update_btn = QPushButton("更新")
-        self.pyocd_update_btn.setToolTip("刷新 PyOCD 目标索引")
+        self.pyocd_update_btn = QPushButton(i18n("btn.update"))
+        self.pyocd_update_btn.setToolTip(i18n("tooltip.refresh_pyocd_index"))
         self.pyocd_update_btn.clicked.connect(self._on_update_pyocd_targets)
         pyocd_layout.addWidget(self.pyocd_update_btn)
 
-        self.pyocd_pack_btn = QPushButton("Pack")
-        self.pyocd_pack_btn.setToolTip("下载 CMSIS Pack 增强芯片支持")
+        self.pyocd_pack_btn = QPushButton(i18n("combo.pack"))
+        self.pyocd_pack_btn.setToolTip(i18n("tooltip.download_cmsis_pack"))
         self.pyocd_pack_btn.clicked.connect(self._on_download_pack)
         pyocd_layout.addWidget(self.pyocd_pack_btn)
 
@@ -628,10 +638,10 @@ class ConnectionDialog(QDialog):
     
     def _create_interface_group(self):
         """创建接口和速度设置组"""
-        group = QGroupBox("步骤4: 接口设置")
+        group = QGroupBox(i18n("label.step4_interface"))
         layout = QHBoxLayout(group)
 
-        layout.addWidget(QLabel("接口:"))
+        layout.addWidget(QLabel(i18n("label.interface")))
         self.interface_combo = QComboBox()
         self.interface_combo.addItems(["SWD", "JTAG"])
         iface = getattr(self, '_saved_interface', 'SWD')
@@ -642,7 +652,7 @@ class ConnectionDialog(QDialog):
 
         layout.addSpacing(20)
 
-        layout.addWidget(QLabel("速度:"))
+        layout.addWidget(QLabel(i18n("label.speed")))
         self.speed_combo = QComboBox()
         self.speed_combo.addItems([
             "Default",
@@ -674,7 +684,7 @@ class ConnectionDialog(QDialog):
 
         layout.addSpacing(20)
 
-        layout.addWidget(QLabel("连接模式:"))
+        layout.addWidget(QLabel(i18n("label.connect_mode")))
         self.connect_mode_combo = QComboBox()
         self.connect_mode_combo.addItems([
             "under_reset",
@@ -685,10 +695,7 @@ class ConnectionDialog(QDialog):
         ])
         self.connect_mode_combo.setCurrentText(self.connect_mode if self.connect_mode else "default")
         self.connect_mode_combo.setToolTip(
-            "under_reset: 复位状态下连接(推荐)\n"
-            "halt_on_connect: 连接后立即暂停\n"
-            "pre_reset: 连接前复位\n"
-            "default: 默认模式"
+            i18n("conn.under_reset") + "\n" + "\n" + i18n("conn.halt_on_connect") + "\n" + "\n" + i18n("conn.pre_reset") + "\n" + "\n" + i18n("conn.default_mode")
         )
         layout.addWidget(self.connect_mode_combo)
 
@@ -696,11 +703,11 @@ class ConnectionDialog(QDialog):
     
     def _create_rtt_group(self):
         """创建RTT控制块设置组"""
-        group = QGroupBox("步骤5: RTT控制块")
+        group = QGroupBox(i18n("label.step5_rtt"))
         layout = QVBoxLayout(group)
         
         auto_layout = QHBoxLayout()
-        self.auto_radio = QRadioButton("自动检测")
+        self.auto_radio = QRadioButton(i18n("combo.rtt_auto_detect"))
         auto_layout.addWidget(self.auto_radio)
         auto_hint = QLabel('<a href="https://kb.segger.com/RTT#Auto-detection" style="text-decoration:none; color:#888888; font-size:9px;">先查向量表0x20,再扫SRAM | 详情</a>')
         auto_hint.setOpenExternalLinks(True)
@@ -709,11 +716,11 @@ class ConnectionDialog(QDialog):
         layout.addLayout(auto_layout)
         
         address_layout = QHBoxLayout()
-        self.address_radio = QRadioButton("地址:")
+        self.address_radio = QRadioButton(i18n("combo.rtt_address"))
         address_layout.addWidget(self.address_radio)
 
         self.address_edit = QLineEdit()
-        self.address_edit.setPlaceholderText("如: 0x22002848 或从map文件搜索")
+        self.address_edit.setPlaceholderText(i18n("placeholder.rtt_address"))
         if self.last_rtt_address:
             self.address_edit.setText(self.last_rtt_address)
         address_layout.addWidget(self.address_edit)
@@ -722,24 +729,24 @@ class ConnectionDialog(QDialog):
         layout.addLayout(address_layout)
         
         # Map文件搜索组
-        map_group = QGroupBox("Map文件搜索")
+        map_group = QGroupBox(i18n("label.map_file_search"))
         map_group_layout = QHBoxLayout(map_group)
         
-        self.open_map_btn = QPushButton("打开map文件")
+        self.open_map_btn = QPushButton(i18n("btn.open_map_file"))
         self.open_map_btn.setFixedHeight(24)
         self.open_map_btn.setEnabled(False)
         self.open_map_btn.clicked.connect(self._on_open_map_file)
         map_group_layout.addWidget(self.open_map_btn)
         
         self.map_path_edit = QLineEdit()
-        self.map_path_edit.setPlaceholderText("map文件路径（可手动编辑）")
+        self.map_path_edit.setPlaceholderText(i18n("placeholder.map_file_path"))
         self.map_path_edit.setFixedWidth(250)
         if self.map_file_path:
             self.map_path_edit.setText(self.map_file_path)
         self.map_path_edit.textChanged.connect(self._on_map_path_changed)
         map_group_layout.addWidget(self.map_path_edit)
         
-        self.search_map_btn = QPushButton("搜索_SEGGER_RTT")
+        self.search_map_btn = QPushButton(i18n("btn.search_rtt_symbol"))
         self.search_map_btn.setFixedHeight(24)
         self.search_map_btn.setEnabled(False)
         self.search_map_btn.clicked.connect(self._on_search_map_file)
@@ -748,11 +755,11 @@ class ConnectionDialog(QDialog):
         layout.addWidget(map_group)
         
         range_layout = QHBoxLayout()
-        self.range_radio = QRadioButton("搜索范围:")
+        self.range_radio = QRadioButton(i18n("combo.rtt_range"))
         range_layout.addWidget(self.range_radio)
         
         self.range_start_edit = QLineEdit()
-        self.range_start_edit.setPlaceholderText("起始地址")
+        self.range_start_edit.setPlaceholderText(i18n("placeholder.range_start"))
         self.range_start_edit.setEnabled(False)
         if self.rtt_range_start:
             self.range_start_edit.setText(self.rtt_range_start)
@@ -761,13 +768,13 @@ class ConnectionDialog(QDialog):
         range_layout.addWidget(QLabel("-"))
         
         self.range_size_edit = QLineEdit()
-        self.range_size_edit.setPlaceholderText("大小")
+        self.range_size_edit.setPlaceholderText(i18n("placeholder.range_size"))
         self.range_size_edit.setEnabled(False)
         if self.rtt_range_size:
             self.range_size_edit.setText(self.rtt_range_size)
         range_layout.addWidget(self.range_size_edit)
         
-        self.auto_fill_btn = QPushButton("获取自动检测地址")
+        self.auto_fill_btn = QPushButton(i18n("btn.auto_fill_address"))
         self.auto_fill_btn.setFixedHeight(24)
         self.auto_fill_btn.setEnabled(False)
         self.auto_fill_btn.clicked.connect(self._on_auto_fill_range)
@@ -794,11 +801,11 @@ class ConnectionDialog(QDialog):
         layout = QHBoxLayout()
         layout.addStretch()
         
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton(i18n("btn.ok"))
         ok_btn.clicked.connect(self.accept)
         layout.addWidget(ok_btn)
         
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(i18n("btn.cancel"))
         cancel_btn.clicked.connect(self.reject)
         layout.addWidget(cancel_btn)
         
@@ -857,21 +864,21 @@ class ConnectionDialog(QDialog):
         from ..utils.device_info import decode_jlink_core, decode_jlink_coreid
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("J-Link 设备型号筛选")
+        dialog.setWindowTitle(i18n("dialog.jlink_device_filter"))
         dialog.setMinimumSize(800, 500)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowMaximizeButtonHint)
 
         layout = QVBoxLayout(dialog)
 
         filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("搜索:"))
+        filter_layout.addWidget(QLabel(i18n("label.search")))
         search_edit = QLineEdit()
-        search_edit.setPlaceholderText("输入关键字筛选")
+        search_edit.setPlaceholderText(i18n("placeholder.keyword_filter"))
         filter_layout.addWidget(search_edit)
-        filter_layout.addWidget(QLabel("厂商:"))
+        filter_layout.addWidget(QLabel(i18n("label.vendor")))
         family_combo = QComboBox()
         families = sorted(set(e.family for e in entries if e.family))
-        family_combo.addItems(["全部"] + families)
+        family_combo.addItems([i18n("combo.all")] + families)
         family_combo.setFixedWidth(150)
         filter_layout.addWidget(family_combo)
         layout.addLayout(filter_layout)
@@ -909,7 +916,7 @@ class ConnectionDialog(QDialog):
                     text in (table.item(i, c).text() or '').lower()
                     for c in range(min(3, table.columnCount()))
                 )
-                match_fam = fam == "全部" or (table.item(i, 1).text() or '') == fam
+                match_fam = fam == i18n("combo.all") or (table.item(i, 1).text() or '') == fam
                 table.setRowHidden(i, not (match_text and match_fam))
 
         search_edit.textChanged.connect(apply_filter)
@@ -940,32 +947,32 @@ class ConnectionDialog(QDialog):
         )
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("PyOCD 目标设备筛选")
+        dialog.setWindowTitle(i18n("dialog.pyocd_target_filter"))
         dialog.setMinimumSize(750, 500)
         dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowMaximizeButtonHint)
         layout = QVBoxLayout(dialog)
 
         filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("搜索:"))
+        filter_layout.addWidget(QLabel(i18n("label.search")))
         search_edit = QLineEdit()
-        search_edit.setPlaceholderText("输入关键字筛选")
+        search_edit.setPlaceholderText(i18n("placeholder.keyword_filter"))
         filter_layout.addWidget(search_edit)
-        filter_layout.addWidget(QLabel("来源:"))
+        filter_layout.addWidget(QLabel(i18n("label.source")))
         source_combo = QComboBox()
-        source_combo.addItems(["全部", "builtin", "pack"])
+        source_combo.addItems([i18n("combo.all"), "builtin", "pack"])
         source_combo.setFixedWidth(100)
         filter_layout.addWidget(source_combo)
-        filter_layout.addWidget(QLabel("厂商:"))
+        filter_layout.addWidget(QLabel(i18n("label.vendor")))
         vendor_combo = QComboBox()
         vendors = sorted(set(e.vendor for e in entries))
-        vendor_combo.addItems(["全部"] + vendors)
+        vendor_combo.addItems([i18n("combo.all")] + vendors)
         vendor_combo.setFixedWidth(150)
         filter_layout.addWidget(vendor_combo)
         layout.addLayout(filter_layout)
 
         table = QTableWidget()
         table.setColumnCount(6)
-        table.setHorizontalHeaderLabels(["Name", "Vendor", "PartNumber", "Families", "Source", "Pack"])
+        table.setHorizontalHeaderLabels(["Name", "Vendor", "PartNumber", "Families", "Source", i18n("combo.pack")])
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table.horizontalHeader().setStretchLastSection(True)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -980,7 +987,7 @@ class ConnectionDialog(QDialog):
             src_item = QTableWidgetItem(e.source)
             if e.source == 'pack':
                 from PyQt5.QtGui import QColor
-                src_item.setForeground(QColor('#4CAF50'))
+                src_item.setForeground(QColor('#2196F3'))
             table.setItem(i, 4, src_item)
             table.setItem(i, 5, QTableWidgetItem(e.pack))
         layout.addWidget(table)
@@ -994,8 +1001,8 @@ class ConnectionDialog(QDialog):
                 if not name_item:
                     continue
                 match_text = not text or text in name_item.text().lower() or text in (table.item(i, 2).text() or '').lower()
-                match_src = src == "全部" or (table.item(i, 4).text() or '') == src
-                match_vnd = vnd == "全部" or (table.item(i, 1).text() or '') == vnd
+                match_src = src == i18n("combo.all") or (table.item(i, 4).text() or '') == src
+                match_vnd = vnd == i18n("combo.all") or (table.item(i, 1).text() or '') == vnd
                 table.setRowHidden(i, not (match_text and match_src and match_vnd))
 
         search_edit.textChanged.connect(apply_filter)
@@ -1023,15 +1030,15 @@ class ConnectionDialog(QDialog):
         if dll_path is None:
             dll_path = get_external_file("JLinkARM.dll")
         if dll_path is None:
-            err_msg = "未找到JLink DLL文件"
+            err_msg = i18n("error.jlink_dll_not_found")
             if self.log_service:
                 self.log_service.error(f"更新设备列表失败: {err_msg}")
-            QMessageBox.warning(self, "错误", err_msg)
+            QMessageBox.warning(self, i18n("dialog.error_title"), err_msg)
             return
         
         self.update_btn.setEnabled(False)
-        progress = QProgressDialog("正在从DLL读取设备列表...", None, 0, 0, self)
-        progress.setWindowTitle("更新设备列表")
+        progress = QProgressDialog(i18n("error.reading_device_list"), None, 0, 0, self)
+        progress.setWindowTitle(i18n("dialog.update_device_list"))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.show()
@@ -1065,12 +1072,12 @@ class ConnectionDialog(QDialog):
                 self.device_combo.setCurrentText(self.last_device)
                 if self.log_service:
                     self.log_service.success(f"设备列表已更新: {len(device_names)}个设备, 保存至{info}")
-                QMessageBox.information(self, "完成", f"已更新设备列表: {len(device_names)}个设备\n保存至: {info}")
+                QMessageBox.information(self, i18n("dialog.complete_title"), i18n("error.updated_device_list").format(len(device_names), info))
             else:
-                err_msg = info if not ok else "未能从DLL读取到设备列表"
+                err_msg = info if not ok else i18n("error.device_list_read_failed")
                 if self.log_service:
                     self.log_service.error(f"更新设备列表失败: {err_msg}")
-                QMessageBox.warning(self, "错误", err_msg)
+                QMessageBox.warning(self, i18n("dialog.error_title"), err_msg)
 
         self._update_device_worker.finished.connect(_on_update_finished)
         self._update_device_worker.start()
@@ -1090,6 +1097,32 @@ class ConnectionDialog(QDialog):
         """Map文件路径变化"""
         self.map_file_path = text.strip()
         self.search_map_btn.setEnabled(self.address_radio.isChecked() and bool(self.map_file_path))
+
+    def _on_firmware_path_for_linkage(self, firmware_path: str):
+        """固件路径变更时联动更新map路径"""
+        if not firmware_path:
+            return
+        current_map = self.map_path_edit.text().strip()
+        if current_map:
+            return
+        from ..utils.path_linkage_utils import PathLinkageUtils
+        fw_dir = PathLinkageUtils.get_directory(firmware_path)
+        fw_basename = os.path.splitext(os.path.basename(firmware_path))[0]
+        map_path = PathLinkageUtils.search_map_file(fw_dir, fw_basename)
+        if map_path:
+            self.map_path_edit.setText(map_path)
+            self.map_file_path = map_path
+
+    def _on_map_path_for_linkage(self, map_path: str):
+        """map路径变更时联动更新固件路径"""
+        if not map_path or not map_path.strip():
+            return
+        current_paths = self.firmware_path_panel.get_all_paths()
+        from ..utils.path_linkage_utils import PathLinkageUtils
+        map_dir = PathLinkageUtils.get_directory(map_path.strip())
+        fw_path = PathLinkageUtils.search_firmware_file(map_dir, hex_priority=True)
+        if fw_path and fw_path not in current_paths:
+            self.firmware_path_panel.add_path(fw_path)
     
     def _on_auto_fill_range(self):
         """自动填充搜索范围"""
@@ -1097,14 +1130,14 @@ class ConnectionDialog(QDialog):
         if not device_name:
             if self.log_service:
                 self.log_service.warning("自动填充失败: 未选择设备")
-            QMessageBox.warning(self, "提示", "请先选择设备型号")
+            QMessageBox.warning(self, i18n("dialog.hint_title"), i18n("error.please_select_device"))
             return
         
         device_info = self._device_info_service.get_device_info(device_name)
         if device_info is None:
             if self.log_service:
                 self.log_service.warning(f"自动填充失败: 设备 '{device_name}' 信息不存在")
-            QMessageBox.warning(self, "提示", f"设备 '{device_name}' 的信息不存在")
+            QMessageBox.warning(self, i18n("dialog.hint_title"), i18n("error.device_info_not_exist").format(device_name))
             return
         
         ram_addr = device_info.extra_attrs.get("RAMAddr", "")
@@ -1113,13 +1146,13 @@ class ConnectionDialog(QDialog):
         if not ram_addr or ram_addr == "0":
             if self.log_service:
                 self.log_service.warning(f"自动填充失败: 设备 '{device_name}' 无有效RAMAddr")
-            QMessageBox.warning(self, "提示", f"设备 '{device_name}' 无有效的RAM地址信息")
+            QMessageBox.warning(self, i18n("dialog.hint_title"), i18n("error.device_no_ram_addr").format(device_name))
             return
         
         if ram_size <= 0:
             if self.log_service:
                 self.log_service.warning(f"自动填充失败: 设备 '{device_name}' 无有效ram_size")
-            QMessageBox.warning(self, "提示", f"设备 '{device_name}' 无有效的RAM大小信息")
+            QMessageBox.warning(self, i18n("dialog.hint_title"), i18n("error.device_no_ram_size").format(device_name))
             return
         
         try:
@@ -1132,7 +1165,7 @@ class ConnectionDialog(QDialog):
         except Exception as e:
             if self.log_service:
                 self.log_service.error(f"自动填充失败: 格式转换错误 - {e}")
-            QMessageBox.warning(self, "错误", f"填充失败: {e}")
+            QMessageBox.warning(self, i18n("dialog.error_title"), f"{i18n('error.fill_failed')}: {e}")
     
     def _on_open_map_file(self):
         """打开map文件选择对话框"""
@@ -1140,7 +1173,7 @@ class ConnectionDialog(QDialog):
         from ..utils.map_file_parser import MapFileParser
         
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择Map文件", self.map_file_path, "Map Files (*.map);;All Files (*)"
+            self, i18n("dialog.select_map_file"), self.map_file_path, "Map Files (*.map);;All Files (*)"
         )
         
         if file_path:
@@ -1155,7 +1188,7 @@ class ConnectionDialog(QDialog):
         from ..utils.map_file_parser import MapFileParser
         
         if not self.map_file_path:
-            QMessageBox.warning(self, "提示", "请先选择map文件")
+            QMessageBox.warning(self, i18n("dialog.hint_title"), i18n("error.please_select_map_file"))
             return
         
         addr, error = MapFileParser.search_symbol(self.map_file_path, self.log_service)
@@ -1165,7 +1198,7 @@ class ConnectionDialog(QDialog):
             if self.log_service:
                 self.log_service.success(f"已填充地址: {addr}")
         else:
-            QMessageBox.warning(self, "搜索失败", error or "未找到_SEGGER_RTT符号")
+            QMessageBox.warning(self, i18n("dialog.search_failed"), error or i18n("error.rtt_symbol_not_found"))
     
     def get_config(self):
         """获取配置信息"""
@@ -1214,6 +1247,8 @@ class ConnectionDialog(QDialog):
             "probe_name": probe_name,
             "probe_backend": probe_backend,
             "probe_serial": probe_serial,
+            "firmware_paths": self.firmware_path_panel.get_all_paths(),
+            "active_firmware_index": self.firmware_path_panel.get_active_index(),
         }
 
         return config

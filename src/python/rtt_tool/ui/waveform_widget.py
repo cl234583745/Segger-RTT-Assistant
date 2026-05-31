@@ -3,6 +3,9 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QToolBar, QComboBox,
                               QSpinBox, QMenu, QCheckBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap, QIcon, QColor
+from ..i18n import _ as i18n, language_changed as i18n_language_changed
+from ..models.channel_config import get_draw_styles
+from ..models.sub_channel_id import SubChannelId
 
 try:
     import pyqtgraph as pg
@@ -24,7 +27,6 @@ DEFAULT_CHANNEL_COLORS = [
     '#AA88FF', '#FFAA88',
 ]
 
-DRAW_STYLES = ["线条", "点", "线+点", "矩形"]
 
 V_DIV_STEPS = [
     0.001, 0.002, 0.005,
@@ -80,9 +82,13 @@ class WaveformWidget(QWidget):
             self._init_ui()
         else:
             layout = QVBoxLayout(self)
-            label = QLabel("pyqtgraph 未安装，示波器模式不可用。\n请执行: pip install pyqtgraph")
+            label = QLabel(i18n("label.pyqtgraph_not_installed"))
             label.setAlignment(Qt.AlignCenter)
             layout.addWidget(label)
+
+        _sig = i18n_language_changed()
+        if _sig:
+            _sig.connect(self._refresh_on_language_changed)
         print(f"[perf] WaveformWidget.__init__: {(__import__('time').perf_counter()-_t0)*1000:.0f}ms")
 
     def _init_ui(self):
@@ -95,16 +101,18 @@ class WaveformWidget(QWidget):
         self._create_acquisition_buttons(self._toolbar)
         self._toolbar.addSeparator()
 
-        self._toolbar.addWidget(QLabel(" 视图: "))
+        self._view_label = QLabel(i18n("label.view"))
+        self._toolbar.addWidget(self._view_label)
         self._view_mode_combo = QComboBox()
-        self._view_mode_combo.addItems(["自由探索", "示波器"])
+        self._view_mode_combo.addItems([i18n("combo.view_free_explore"), i18n("combo.view_oscilloscope")])
         self._view_mode_combo.setCurrentIndex(1)
         self._view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
         self._toolbar.addWidget(self._view_mode_combo)
 
         self._toolbar.addSeparator()
 
-        self._toolbar.addWidget(QLabel(" 时基: "))
+        self._time_base_label = QLabel(i18n("label.time_base"))
+        self._toolbar.addWidget(self._time_base_label)
         self._time_base_combo = QComboBox()
         for us_val in TimeBaseManager.STEPS_US:
             display = TimeBaseManager.to_display_string(us_val)
@@ -113,9 +121,10 @@ class WaveformWidget(QWidget):
         self._time_base_combo.currentIndexChanged.connect(self._on_time_base_changed)
         self._toolbar.addWidget(self._time_base_combo)
 
-        self._toolbar.addWidget(QLabel(" 触发: "))
+        self._trigger_label = QLabel(i18n("label.trigger"))
+        self._toolbar.addWidget(self._trigger_label)
         self._trigger_combo = QComboBox()
-        self._trigger_combo.addItems(["自动", "正常", "单次"])
+        self._trigger_combo.addItems([i18n("combo.trigger_auto"), i18n("combo.trigger_normal"), i18n("combo.trigger_single")])
         self._trigger_combo.currentIndexChanged.connect(self._on_trigger_changed)
         self._toolbar.addWidget(self._trigger_combo)
 
@@ -137,16 +146,16 @@ class WaveformWidget(QWidget):
         vb.sigRangeChanged.connect(self._on_view_range_changed)
 
         vb.menu = QMenu()
-        vb.menu.setTitle("示波器")
-        act_auto = vb.menu.addAction("自动范围")
-        act_auto.triggered.connect(lambda: self._plot_widget.enableAutoRange())
-        act_reset = vb.menu.addAction("重置视图")
-        act_reset.triggered.connect(lambda: self._plot_widget.autoRange())
+        vb.menu.setTitle(i18n("osc.title"))
+        self._ctx_act_auto = vb.menu.addAction(i18n("osc.auto_range"))
+        self._ctx_act_auto.triggered.connect(lambda: self._plot_widget.enableAutoRange())
+        self._ctx_act_reset = vb.menu.addAction(i18n("osc.reset_view"))
+        self._ctx_act_reset.triggered.connect(lambda: self._plot_widget.autoRange())
         vb.menu.addSeparator()
-        act_grid = vb.menu.addAction("显示网格")
-        act_grid.setCheckable(True)
-        act_grid.setChecked(True)
-        act_grid.toggled.connect(lambda checked: self._plot_widget.showGrid(x=checked, y=checked, alpha=0.3 if checked else 0))
+        self._ctx_act_grid = vb.menu.addAction(i18n("osc.show_grid"))
+        self._ctx_act_grid.setCheckable(True)
+        self._ctx_act_grid.setChecked(True)
+        self._ctx_act_grid.toggled.connect(lambda checked: self._plot_widget.showGrid(x=checked, y=checked, alpha=0.3 if checked else 0))
 
         self._plot_widget.wheelEvent = self._on_wheel_event
 
@@ -163,6 +172,40 @@ class WaveformWidget(QWidget):
         self._osc_strategy = OscilloscopeViewStrategy(self._tb_manager)
         self._current_strategy = self._osc_strategy
         self._current_strategy.activate(self._plot_widget, self._channels)
+
+    def _refresh_on_language_changed(self, lang):
+        if not PYQTGRAPH_AVAILABLE:
+            return
+        if hasattr(self, '_acq_state'):
+            self.update_acquisition_buttons(self._acq_state)
+        if hasattr(self, '_view_label'):
+            self._view_label.setText(i18n("label.view"))
+        if hasattr(self, '_view_mode_combo'):
+            self._view_mode_combo.setItemText(0, i18n("combo.view_free_explore"))
+            self._view_mode_combo.setItemText(1, i18n("combo.view_oscilloscope"))
+        if hasattr(self, '_time_base_label'):
+            self._time_base_label.setText(i18n("label.time_base"))
+        if hasattr(self, '_trigger_label'):
+            self._trigger_label.setText(i18n("label.trigger"))
+        if hasattr(self, '_trigger_combo'):
+            self._trigger_combo.setItemText(0, i18n("combo.trigger_auto"))
+            self._trigger_combo.setItemText(1, i18n("combo.trigger_normal"))
+            self._trigger_combo.setItemText(2, i18n("combo.trigger_single"))
+        if hasattr(self, '_sampling_rate_label'):
+            self._sampling_rate_label.setText(i18n("label.sampling_rate"))
+        if hasattr(self, '_sample_rate_spin'):
+            self._sample_rate_spin.setSpecialValueText(i18n("combo.sampling_auto"))
+            self._sample_rate_spin.setToolTip(i18n("tooltip.sampling_rate"))
+        if hasattr(self, '_ctx_act_auto'):
+            self._ctx_act_auto.setText(i18n("osc.auto_range"))
+        if hasattr(self, '_ctx_act_reset'):
+            self._ctx_act_reset.setText(i18n("osc.reset_view"))
+        if hasattr(self, '_ctx_act_grid'):
+            self._ctx_act_grid.setText(i18n("osc.show_grid"))
+        if hasattr(self, '_plot_widget'):
+            vb = self._plot_widget.getViewBox()
+            if hasattr(vb, 'menu') and vb.menu:
+                vb.menu.setTitle(i18n("osc.title"))
 
     def _on_view_mode_changed(self, index):
         modes = ["free_explore", "oscilloscope"]
@@ -223,10 +266,27 @@ class WaveformWidget(QWidget):
         y_max = vr[1][1]
         y_range = vr[1][1] - vr[1][0]
         ch_idx = 0
-        for ch_info in self._channels.values():
+        for ch_key in self._get_ordered_channel_keys():
+            ch_info = self._channels[ch_key]
+            if not ch_info.get('enabled', True):
+                if 'freq_text' in ch_info:
+                    ch_info['freq_text'].setVisible(False)
+                continue
             if 'freq_text' in ch_info:
                 ch_info['freq_text'].setPos(x_max, y_max - ch_idx * y_range * 0.08)
                 ch_idx += 1
+
+    def _get_ordered_channel_keys(self):
+        int_keys = sorted([k for k in self._channels.keys() if isinstance(k, int)])
+        result = []
+        for k in int_keys:
+            result.append(k)
+            sub_keys = sorted(
+                [sk for sk in self._channels.keys() if isinstance(sk, tuple) and sk[0] == k],
+                key=lambda x: x[1]
+            )
+            result.extend(sub_keys)
+        return result
 
     def _on_mouse_moved(self, evt):
         pos = evt[0]
@@ -239,34 +299,35 @@ class WaveformWidget(QWidget):
             self._hline.setVisible(False)
 
     def _create_acquisition_buttons(self, toolbar: QToolBar) -> None:
-        self._start_stop_btn = QPushButton("开始")
+        self._start_stop_btn = QPushButton(i18n("btn.start"))
         self._start_stop_btn.clicked.connect(self._on_start_stop_clicked)
         toolbar.addWidget(self._start_stop_btn)
 
-        self._pause_btn = QPushButton("暂停")
+        self._pause_btn = QPushButton(i18n("btn.pause"))
         self._pause_btn.setEnabled(False)
         self._pause_btn.clicked.connect(self._on_pause_clicked)
         toolbar.addWidget(self._pause_btn)
 
-        self._clear_btn = QPushButton("清除")
+        self._clear_btn = QPushButton(i18n("btn.clear"))
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         toolbar.addWidget(self._clear_btn)
 
     def _create_sampling_control(self, toolbar: QToolBar) -> None:
         toolbar.addSeparator()
 
-        toolbar.addWidget(QLabel(" 采样率: "))
+        self._sampling_rate_label = QLabel(i18n("label.sampling_rate"))
+        toolbar.addWidget(self._sampling_rate_label)
         self._sample_rate_spin = QSpinBox()
         self._sample_rate_spin.setRange(0, 1000000)
         self._sample_rate_spin.setSuffix(" Hz")
-        self._sample_rate_spin.setSpecialValueText("自动")
+        self._sample_rate_spin.setSpecialValueText(i18n("combo.sampling_auto"))
         self._sample_rate_spin.setValue(0)
-        self._sample_rate_spin.setToolTip("采样率(Hz)。0=自动估算，即尽可能快地采样")
+        self._sample_rate_spin.setToolTip(i18n("tooltip.sampling_rate"))
         self._sample_rate_spin.valueChanged.connect(self._on_sampling_rate_changed)
         toolbar.addWidget(self._sample_rate_spin)
 
     def _on_start_stop_clicked(self) -> None:
-        if self._start_stop_btn.text() == "开始":
+        if getattr(self, '_acq_state', 'idle') == 'idle':
             self.acquisition_start.emit()
         else:
             self.acquisition_stop.emit()
@@ -282,39 +343,48 @@ class WaveformWidget(QWidget):
         self.sampling_rate_changed.emit(float(value))
 
     def _on_pause_clicked(self) -> None:
-        if self._pause_btn.text() == "暂停":
-            self.acquisition_pause.emit()
-        else:
+        if getattr(self, '_acq_state', 'idle') == 'paused':
             self.acquisition_resume.emit()
+        else:
+            self.acquisition_pause.emit()
 
     def update_acquisition_buttons(self, state: str) -> None:
+        self._acq_state = state
         if state == 'idle':
             self._start_stop_btn.setEnabled(True)
-            self._start_stop_btn.setText("开始")
+            self._start_stop_btn.setText(i18n("btn.start"))
             self._pause_btn.setEnabled(False)
-            self._pause_btn.setText("暂停")
+            self._pause_btn.setText(i18n("btn.pause"))
             self._display_timer.stop()
             self._pending_data.clear()
             self._current_strategy.set_drag_enabled(
                 self._plot_widget, x_enabled=True, y_enabled=False)
         elif state == 'running':
             self._start_stop_btn.setEnabled(True)
-            self._start_stop_btn.setText("停止")
+            self._start_stop_btn.setText(i18n("btn.stop"))
             self._pause_btn.setEnabled(True)
-            self._pause_btn.setText("暂停")
+            self._pause_btn.setText(i18n("btn.pause"))
             self._display_timer.start()
             self._current_strategy.set_drag_enabled(
                 self._plot_widget, x_enabled=False, y_enabled=False)
         elif state == 'paused':
             self._start_stop_btn.setEnabled(True)
-            self._start_stop_btn.setText("停止")
+            self._start_stop_btn.setText(i18n("btn.stop"))
             self._pause_btn.setEnabled(True)
-            self._pause_btn.setText("恢复")
+            self._pause_btn.setText(i18n("btn.resume"))
             self._display_timer.stop()
             self._current_strategy.set_drag_enabled(
                 self._plot_widget, x_enabled=True, y_enabled=False)
 
-    def _get_channel_color(self, channel: int) -> str:
+    def _get_channel_color(self, channel) -> str:
+        if isinstance(channel, SubChannelId):
+            key = channel.to_signal_key()
+            if key in self._channel_colors:
+                return self._channel_colors[key]
+            idx = (channel.rtt_channel - 1) * 4 + channel.field_index
+            color = DEFAULT_CHANNEL_COLORS[idx % len(DEFAULT_CHANNEL_COLORS)]
+            self._channel_colors[key] = color
+            return color
         if channel in self._channel_colors:
             return self._channel_colors[channel]
         default = DEFAULT_CHANNEL_COLORS[(channel - 1) % len(DEFAULT_CHANNEL_COLORS)]
@@ -355,8 +425,41 @@ class WaveformWidget(QWidget):
             kwargs['symbol'] = None
         return kwargs
 
-    def add_channel(self, channel: int, name: str = None):
+    def add_channel(self, channel, name: str = None):
         if not PYQTGRAPH_AVAILABLE:
+            return
+        if isinstance(channel, SubChannelId):
+            key = channel.to_signal_key()
+            if key in self._channels:
+                return
+            if name is None:
+                name = channel.to_display_name()
+            color = self._get_channel_color(channel)
+            style = self._get_channel_style(key)
+            draw_kwargs = self._get_draw_kwargs(color, style)
+            curve = self._plot_widget.plot(name=name, **draw_kwargs)
+
+            freq_text = pg.TextItem(text='', color=color, anchor=(1, 0))
+            vr = self._plot_widget.viewRange()
+            y_range = vr[1][1] - vr[1][0] if vr[1][1] != vr[1][0] else 1.0
+            ch_idx = len(self._channels)
+            freq_text.setPos(vr[0][1], vr[1][1] - ch_idx * y_range * 0.08)
+            self._plot_widget.addItem(freq_text)
+
+            curve.setDownsampling(ds=True, auto=True, method='peak')
+
+            self._channels[key] = {
+                'curve': curve,
+                'name': name,
+                'color': color,
+                'style': style,
+                'vdiv': self._get_channel_vdiv(key),
+                'yoffset': self._get_channel_yoffset(key),
+                'enabled': self._get_channel_enabled(key),
+                'freq_text': freq_text,
+                'has_data': False,
+                'sub_ch_id': channel,
+            }
             return
         if channel in self._channels:
             return
@@ -416,25 +519,36 @@ class WaveformWidget(QWidget):
         for ch in list(self._channels.keys()):
             self._redraw_channel(ch)
 
-    def remove_channel(self, channel: int):
+    def remove_channel(self, channel):
         if not PYQTGRAPH_AVAILABLE:
             return
-        ch_info = self._channels.pop(channel, None)
+        if isinstance(channel, SubChannelId):
+            key = channel.to_signal_key()
+        else:
+            key = channel
+        ch_info = self._channels.pop(key, None)
         if ch_info is not None:
             self._plot_widget.removeItem(ch_info['curve'])
             if 'freq_text' in ch_info:
                 self._plot_widget.removeItem(ch_info['freq_text'])
 
-    def update_data(self, channel: int, timestamps: list, values: list):
+    def update_data(self, channel, timestamps: list, values: list):
         if not PYQTGRAPH_AVAILABLE:
             return
-        if channel not in self._channels:
+        if isinstance(channel, SubChannelId):
+            key = channel.to_signal_key()
+        else:
+            key = channel
+        if key not in self._channels:
             self.add_channel(channel)
             import logging
-            logging.getLogger(__name__).info(f"自动添加示波器通道 CH{channel}")
+            if isinstance(channel, SubChannelId):
+                logging.getLogger(__name__).info(f"自动添加子通道 {channel.to_display_name()}")
+            else:
+                logging.getLogger(__name__).info(f"自动添加示波器通道 CH{channel}")
         if not timestamps or not values:
             return
-        self._pending_data[channel] = (timestamps, values)
+        self._pending_data[key] = (timestamps, values)
 
     def update_frequency(self, channel: int, frequency: float):
         self._hs_frequencies[channel] = frequency
@@ -485,9 +599,19 @@ class WaveformWidget(QWidget):
                 if self._is_high_speed and channel in self._hs_frequencies:
                     frequency = self._hs_frequencies[channel]
                 else:
-                    frequency = self._calculate_frequency(timestamps, values)
+                    if not hasattr(self, '_freq_calc_counter'):
+                        self._freq_calc_counter = {}
+                    cnt = self._freq_calc_counter.get(channel, 0) + 1
+                    self._freq_calc_counter[channel] = cnt
+                    if cnt % 10 == 0:
+                        frequency = self._calculate_frequency(timestamps, values)
+                        if frequency is not None and frequency > 0:
+                            self._last_frequency[channel] = frequency
+                        else:
+                            self._last_frequency.pop(channel, None)
+                    else:
+                        frequency = self._last_frequency.get(channel)
                 if frequency is not None and frequency > 0:
-                    self._last_frequency[channel] = frequency
                     if 'freq_text' in ch_info:
                         if frequency < 1000:
                             freq_str = f"{frequency:.1f} Hz"
@@ -525,7 +649,8 @@ class WaveformWidget(QWidget):
             return
         all_min = None
         all_max = None
-        for ch_info in self._channels.values():
+        for ch_key in self._get_ordered_channel_keys():
+            ch_info = self._channels[ch_key]
             if not ch_info['enabled'] or not ch_info.get('has_data'):
                 continue
             curve = ch_info['curve']
@@ -557,6 +682,9 @@ class WaveformWidget(QWidget):
     def _calculate_frequency(self, timestamps: list, values: list) -> float:
         if len(values) < 10:
             return None
+        max_samples = min(len(values), 500)
+        values = values[-max_samples:]
+        timestamps = timestamps[-max_samples:]
         peaks = []
         for i in range(1, len(values) - 1):
             if values[i] > values[i-1] and values[i] > values[i+1]:
@@ -625,39 +753,53 @@ class WaveformWidget(QWidget):
         if 0 <= index < len(modes):
             self._trigger_mode = modes[index]
 
-    def set_channel_color(self, channel: int, color: str) -> None:
-        if channel not in self._channels:
-            return
-        self._channels[channel]['color'] = color
-        self._channel_colors[channel] = color
-        self._redraw_channel(channel)
+    def _resolve_channel_key(self, channel):
+        if isinstance(channel, tuple):
+            channel = SubChannelId(rtt_channel=channel[0], field_index=channel[1], field_label="", rtt_channel_name="")
+        if isinstance(channel, SubChannelId):
+            return channel.to_signal_key()
+        return channel
 
-    def set_channel_style(self, channel: int, style: int) -> None:
-        if channel not in self._channels:
+    def set_channel_color(self, channel, color: str) -> None:
+        key = self._resolve_channel_key(channel)
+        if key not in self._channels:
             return
-        self._channels[channel]['style'] = style
-        self._channel_styles[channel] = style
-        self._redraw_channel(channel)
+        self._channels[key]['color'] = color
+        self._channel_colors[key] = color
+        self._redraw_channel(key)
 
-    def set_channel_vdiv(self, channel: int, vdiv: float) -> None:
+    def set_channel_style(self, channel, style: int) -> None:
+        key = self._resolve_channel_key(channel)
+        if key not in self._channels:
+            return
+        self._channels[key]['style'] = style
+        self._channel_styles[key] = style
+        self._redraw_channel(key)
+
+    def set_channel_vdiv(self, channel, vdiv: float) -> None:
         if vdiv <= 0:
             return
-        if channel not in self._channels:
+        key = self._resolve_channel_key(channel)
+        if key not in self._channels:
             return
-        self._channels[channel]['vdiv'] = vdiv
-        self._channel_vdiv[channel] = vdiv
-        self._redraw_channel(channel)
+        self._channels[key]['vdiv'] = vdiv
+        self._channel_vdiv[key] = vdiv
+        self._redraw_channel(key)
 
-    def set_channel_yoffset(self, channel: int, yoffset: float) -> None:
-        if channel not in self._channels:
+    def set_channel_yoffset(self, channel, yoffset: float) -> None:
+        key = self._resolve_channel_key(channel)
+        if key not in self._channels:
             return
-        self._channels[channel]['yoffset'] = yoffset
-        self._channel_yoffset[channel] = yoffset
-        self._redraw_channel(channel)
+        self._channels[key]['yoffset'] = yoffset
+        self._channel_yoffset[key] = yoffset
+        self._redraw_channel(key)
 
-    def set_channel_enabled(self, channel: int, enabled: bool) -> None:
-        if channel not in self._channels:
+    def set_channel_enabled(self, channel, enabled: bool) -> None:
+        key = self._resolve_channel_key(channel)
+        if key not in self._channels:
             return
-        self._channels[channel]['enabled'] = enabled
-        self._channel_enabled[channel] = enabled
-        self._channels[channel]['curve'].setVisible(enabled)
+        self._channels[key]['enabled'] = enabled
+        self._channel_enabled[key] = enabled
+        self._channels[key]['curve'].setVisible(enabled)
+        if 'freq_text' in self._channels[key]:
+            self._channels[key]['freq_text'].setVisible(enabled)

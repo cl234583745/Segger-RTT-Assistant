@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Dict
 
+from ..i18n import _ as i18n
+
+
 
 DEFAULT_CHANNEL_COLORS = [
     '#00FF00', '#FF6600', '#00AAFF', '#FF00FF',
@@ -18,8 +21,10 @@ V_DIV_STEPS = [
     1000, 2000, 5000,
 ]
 
-DRAW_STYLES = ["线条", "点", "线+点", "矩形"]
+DRAW_STYLES_KEYS = ("combo.draw_line", "combo.draw_point", "combo.draw_line_point", "combo.draw_rect")
 
+def get_draw_styles():
+    return [i18n(k) for k in DRAW_STYLES_KEYS]
 
 @dataclass
 class ChannelConfig:
@@ -44,7 +49,7 @@ class ChannelConfig:
             style=0,
             vdiv=1.0,
             yoffset=0.0,
-            enabled=True,
+            enabled=False,
         )
 
     def to_dict(self) -> dict:

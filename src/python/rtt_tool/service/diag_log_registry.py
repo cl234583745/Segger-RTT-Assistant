@@ -5,6 +5,7 @@ import os
 import logging
 from dataclasses import dataclass
 from ..runtime.path_config import RUNTIME_LOG_DIR
+from ..i18n import _ as i18n
 
 _LEVEL_MAP = {
     'DEBUG': logging.DEBUG, 'INFO': logging.INFO,
@@ -24,13 +25,13 @@ class DiagLogTarget:
 _DIAG_LOG_TARGETS = [
     DiagLogTarget(
         name='rtt_system', file_name='rtt_system.log',
-        description='应用诊断日志', logger_name='rtt_system'),
+        description=i18n("diag.app_log"), logger_name='rtt_system'),
     DiagLogTarget(
         name='pyocd_diag', file_name='pyocd_diag.log',
-        description='PyOCD连接诊断', logger_name='pyocd_diag'),
+        description=i18n("diag.pyocd_conn"), logger_name='pyocd_diag'),
     DiagLogTarget(
         name='rtt_debug', file_name='rtt_debug.log',
-        description='PyOCD库内部诊断', logger_name='pyocd'),
+        description=i18n("diag.pyocd_internal"), logger_name='pyocd'),
 ]
 
 
@@ -71,9 +72,9 @@ class DiagLogRegistry:
                     pass
             return True, ''
         except PermissionError as e:
-            return False, f'权限不足: {e}'
+            return False, i18n("error.permission_denied").format(e)
         except OSError as e:
-            return False, f'清空失败: {e}'
+            return False, i18n("error.clear_file_failed").format(e)
 
     @staticmethod
     def format_file_size(size_bytes):

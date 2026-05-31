@@ -11,6 +11,7 @@ from .dependency_manifest import (
     DependencyItem, DependencyType, BackendType,
     get_all_dependencies, BACKEND_INFO,
 )
+from ..i18n import _ as i18n
 
 
 @dataclass
@@ -50,7 +51,7 @@ class DependencyCheckReport:
         lines = []
         for s in self.items:
             tag = '✓' if s.is_available else '✗'
-            req = '[必需]' if s.required else '[可选]'
+            req = i18n("setup.required") if s.required else i18n("setup.optional")
             lines.append(f"  {tag} {req} {s.name}: {s.detail}")
         return '\n'.join(lines)
 
@@ -61,28 +62,28 @@ class DependencyChecker:
     def check_runtime_python_package(name: str) -> tuple:
         pkg_dir = os.path.join(RUNTIME_VENV_SITE_PACKAGES, name)
         if os.path.isdir(pkg_dir):
-            return True, 'runtime venv中存在'
+            return True, i18n("dep.in_venv")
         init_file = os.path.join(RUNTIME_VENV_SITE_PACKAGES, name + '.py')
         if os.path.isfile(init_file):
-            return True, 'runtime venv中存在'
-        return False, 'runtime venv中不存在'
+            return True, i18n("dep.in_venv")
+        return False, i18n("dep.not_in_venv")
 
     @staticmethod
     def check_runtime_dll(filename: str) -> tuple:
         dll_path = os.path.join(RUNTIME_DLL_DIR, filename)
         if os.path.isfile(dll_path):
             size_kb = os.path.getsize(dll_path) / 1024
-            return True, f'runtime中存在 ({size_kb:.0f}KB)'
-        return False, 'runtime中不存在'
+            return True, i18n("dep.in_runtime").format(f'{size_kb:.0f}KB')
+        return False, i18n("dep.not_in_runtime")
 
     @staticmethod
     def check_runtime_packs() -> tuple:
         if not os.path.isdir(RUNTIME_PACKS_DIR):
-            return False, 'runtime/packs目录不存在'
+            return False, i18n("dep.packs_dir_missing")
         packs = [f for f in os.listdir(RUNTIME_PACKS_DIR) if f.endswith('.pack')]
         if packs:
-            return True, f'runtime中{len(packs)}个Pack文件'
-        return False, 'runtime中无Pack文件'
+            return True, i18n("dep.packs_in_runtime").format(len(packs))
+        return False, i18n("dep.no_pack_in_runtime")
 
     @classmethod
     def check_all(cls, selected_backends: List[BackendType] = None) -> DependencyCheckReport:
@@ -97,7 +98,7 @@ class DependencyChecker:
             elif dep.dep_type == DependencyType.PACK:
                 ok, detail = cls.check_runtime_packs()
             else:
-                ok, detail = True, '未知类型'
+                ok, detail = True, i18n("dep.unknown_type")
 
             report.items.append(DependencyStatus(
                 name=dep.name, dep_type=dep.dep_type,

@@ -4,23 +4,28 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QCheckBox,
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap, QIcon, QColor
 
-from ..models.channel_config import V_DIV_STEPS, DRAW_STYLES, DEFAULT_CHANNEL_COLORS
+from ..models.channel_config import V_DIV_STEPS, get_draw_styles, DEFAULT_CHANNEL_COLORS
+from ..i18n import _ as i18n, language_changed as i18n_language_changed
 
 
 class ChannelCard(QWidget):
 
-    channel_enabled_changed = pyqtSignal(int, bool)
-    channel_color_changed = pyqtSignal(int, str)
-    channel_style_changed = pyqtSignal(int, int)
-    channel_vdiv_changed = pyqtSignal(int, float)
-    channel_yoffset_changed = pyqtSignal(int, float)
-    channel_name_changed = pyqtSignal(int, str)
+    channel_enabled_changed = pyqtSignal(object, bool)
+    channel_color_changed = pyqtSignal(object, str)
+    channel_style_changed = pyqtSignal(object, int)
+    channel_vdiv_changed = pyqtSignal(object, float)
+    channel_yoffset_changed = pyqtSignal(object, float)
+    channel_name_changed = pyqtSignal(object, str)
 
-    def __init__(self, channel: int, parent=None):
+    def __init__(self, channel, parent=None, is_sub_channel=False):
         super().__init__(parent)
         self._channel = channel
+        self._is_sub_channel = is_sub_channel
         self._block_signals = False
         self._init_ui()
+        _sig = i18n_language_changed()
+        if _sig:
+            _sig.connect(self._refresh_on_language_changed)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -31,24 +36,34 @@ class ChannelCard(QWidget):
         header.setSpacing(4)
 
         self._enabled_cb = QCheckBox()
-        self._enabled_cb.setChecked(True)
+        self._enabled_cb.setChecked(False)
         self._enabled_cb.stateChanged.connect(self._on_enabled_changed)
         header.addWidget(self._enabled_cb)
 
-        self._name_label = QLabel(f"CH{self._channel}")
-        self._name_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        if isinstance(self._channel, int):
+            name_text = f"CH{self._channel}"
+        else:
+            name_text = f"  └ CH{self._channel[0]}[{self._channel[1] + 1}]"
+        self._name_label = QLabel(name_text)
+        self._name_label.setStyleSheet("font-weight: bold; font-size: 11px;" if not self._is_sub_channel else "font-size: 10px; color: #CCC;")
         header.addWidget(self._name_label)
 
         self._active_indicator = QLabel("●")
         self._active_indicator.setStyleSheet("color: #555; font-size: 10px;")
         self._active_indicator.setFixedWidth(12)
-        self._active_indicator.setToolTip("空闲")
+        self._active_indicator.setToolTip(i18n("tooltip.channel_idle"))
         header.addWidget(self._active_indicator)
 
         self._color_btn = QPushButton()
         self._color_btn.setFixedSize(20, 20)
-        default_color = DEFAULT_CHANNEL_COLORS[
-            (self._channel - 1) % len(DEFAULT_CHANNEL_COLORS)]
+        if isinstance(self._channel, int):
+            default_color = DEFAULT_CHANNEL_COLORS[
+                (self._channel - 1) % len(DEFAULT_CHANNEL_COLORS)]
+        else:
+            base_ch = self._channel[0]
+            field_idx = self._channel[1]
+            idx = (base_ch - 1) * 4 + field_idx
+            default_color = DEFAULT_CHANNEL_COLORS[idx % len(DEFAULT_CHANNEL_COLORS)]
         self._set_color_btn_style(default_color)
         self._color_btn.clicked.connect(self._on_color_clicked)
         header.addWidget(self._color_btn)
@@ -58,11 +73,11 @@ class ChannelCard(QWidget):
 
         style_row = QHBoxLayout()
         style_row.setSpacing(4)
-        style_label = QLabel("样式:")
+        style_label = QLabel(i18n("label.style"))
         style_label.setFixedWidth(32)
         style_row.addWidget(style_label)
         self._style_combo = QComboBox()
-        self._style_combo.addItems(DRAW_STYLES)
+        self._style_combo.addItems(get_draw_styles())
         self._style_combo.currentIndexChanged.connect(self._on_style_changed)
         style_row.addWidget(self._style_combo)
         style_row.addStretch()
@@ -83,7 +98,7 @@ class ChannelCard(QWidget):
 
         yoffset_row = QHBoxLayout()
         yoffset_row.setSpacing(4)
-        yoffset_label = QLabel("Y偏移:")
+        yoffset_label = QLabel(i18n("label.y_offset"))
         yoffset_label.setFixedWidth(32)
         yoffset_row.addWidget(yoffset_label)
         self._yoffset_spin = QDoubleSpinBox()
@@ -97,28 +112,34 @@ class ChannelCard(QWidget):
 
         fmt_row = QHBoxLayout()
         fmt_row.setSpacing(4)
-        fmt_label = QLabel("格式:")
+        fmt_label = QLabel(i18n("label.format"))
         fmt_label.setFixedWidth(32)
         fmt_row.addWidget(fmt_label)
-        self._format_label = QLabel("自动识别")
+        self._format_label = QLabel(i18n("label.auto_detect_format"))
         self._format_label.setStyleSheet("color: #00AAFF; font-weight: bold; font-size: 10px;")
         fmt_row.addWidget(self._format_label)
         layout.addLayout(fmt_row)
 
         buf_row = QHBoxLayout()
         buf_row.setSpacing(4)
-        buf_label = QLabel("缓冲:")
+        buf_label = QLabel(i18n("label.buffer"))
         buf_label.setFixedWidth(32)
         buf_row.addWidget(buf_label)
         self._mcu_buf_label = QLabel("?")
         self._mcu_buf_label.setStyleSheet("color: #888888; font-size: 10px;")
-        self._mcu_buf_label.setToolTip("MCU侧RTT上行缓冲区大小")
+        self._mcu_buf_label.setToolTip(i18n("tooltip.mcu_buffer"))
         buf_row.addWidget(self._mcu_buf_label)
         layout.addLayout(buf_row)
 
-        self.setStyleSheet(
-            "ChannelCard { border: 1px solid #555; border-radius: 3px; }"
-        )
+        if self._is_sub_channel:
+            layout.setContentsMargins(20, 4, 4, 4)
+            self.setStyleSheet(
+                "ChannelCard { border: 1px dashed #444; border-radius: 3px; }"
+            )
+        else:
+            self.setStyleSheet(
+                "ChannelCard { border: 1px solid #555; border-radius: 3px; }"
+            )
 
     def _set_color_btn_style(self, color: str):
         self._color_btn.setStyleSheet(
@@ -132,7 +153,7 @@ class ChannelCard(QWidget):
 
     def _on_color_clicked(self):
         current = self._color_btn.property('channel_color') or '#00FF00'
-        color = QColorDialog.getColor(QColor(current), self, "选择通道颜色")
+        color = QColorDialog.getColor(QColor(current), self, i18n("dialog.select_channel_color"))
         if color.isValid():
             name = color.name()
             self._set_color_btn_style(name)
@@ -209,11 +230,27 @@ class ChannelCard(QWidget):
     def set_active(self, active: bool) -> None:
         if active:
             self._active_indicator.setStyleSheet("color: #00FF00; font-size: 10px;")
-            self._active_indicator.setToolTip("活跃")
+            self._active_indicator.setToolTip(i18n("tooltip.channel_active"))
+            if not self._enabled_cb.isChecked():
+                self._block_signals = True
+                self._enabled_cb.setChecked(True)
+                self._block_signals = False
         else:
             self._active_indicator.setStyleSheet("color: #555; font-size: 10px;")
-            self._active_indicator.setToolTip("空闲")
+            self._active_indicator.setToolTip(i18n("tooltip.channel_idle"))
+
+    def set_disabled(self, disabled: bool) -> None:
+        self._enabled_cb.setEnabled(not disabled)
+        self._color_btn.setEnabled(not disabled)
+        self._style_combo.setEnabled(not disabled)
+        self._vdiv_combo.setEnabled(not disabled)
+        self._yoffset_spin.setEnabled(not disabled)
+
+    def _refresh_on_language_changed(self, lang):
+        if hasattr(self, '_style_combo'):
+            for i, text in enumerate(get_draw_styles()):
+                self._style_combo.setItemText(i, text)
 
     @property
-    def channel_number(self) -> int:
+    def channel_number(self):
         return self._channel

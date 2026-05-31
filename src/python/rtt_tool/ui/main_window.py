@@ -40,6 +40,36 @@ from .waveform_widget import WaveformWidget
 from .channel_panel import ChannelPanel
 from ..utils.resource_utils import get_resource_path, is_frozen, get_external_file, get_exe_dir
 from .. import __version__
+from ..i18n import _ as i18n, language_changed as i18n_language_changed, set_language as i18n_set_language, get_language as i18n_get_language
+
+
+STATUS_DISCONNECTED = "disconnected"
+STATUS_CONNECTING = "connecting"
+STATUS_CONNECTED = "connected"
+STATUS_READY = "ready"
+STATUS_LOADING_BACKEND = "loading_backend"
+STATUS_INITIALIZING = "initializing"
+STATUS_DISCONNECTING = "disconnecting"
+STATUS_ERROR = "error"
+STATUS_WARNING = "warning"
+
+_STATUS_KEY_MAP = {
+    STATUS_DISCONNECTED: "status.disconnected",
+    STATUS_CONNECTING: "status.connecting",
+    STATUS_CONNECTED: "status.connected",
+    STATUS_READY: "status.ready",
+    STATUS_LOADING_BACKEND: "status.loading_backend",
+    STATUS_INITIALIZING: "status.initializing",
+    STATUS_DISCONNECTING: "status.disconnecting",
+    STATUS_ERROR: "status.error",
+    STATUS_WARNING: "status.warning",
+}
+
+_STATUS_COLOR_MAP = {
+    STATUS_DISCONNECTED: "#888888",
+    STATUS_CONNECTING: "#FF8800",
+    STATUS_CONNECTED: "#00AA00",
+}
 
 
 DARK_STYLESHEET = """
@@ -67,9 +97,10 @@ QToolTip { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; }
 QHeaderView { background-color: #3c3c3c; color: #e0e0e0; }
 QHeaderView::section { background-color: #3c3c3c; color: #e0e0e0; border: 1px solid #555; padding: 4px; }
 QTableWidget { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
-QTableWidget::item { color: #e0e0e0; }
+
 QDialog { background-color: #2b2b2b; }
 QListWidget { background-color: #1e1e1e; color: #e0e0e0; border: 1px solid #555; }
+QListWidget::item:selected { background-color: #094771; }
 QRadioButton { color: #e0e0e0; }
 QRadioButton:disabled { color: #666; }
 QLabel:disabled { color: #666; }
@@ -86,6 +117,7 @@ QToolButton:hover { background-color: #e0e0e0; border-color: #888; }
 QToolButton:pressed { background-color: #d0d0d0; border-color: #666; padding-top: 5px; padding-bottom: 3px; }
 QToolButton:disabled { background-color: #f5f5f5; color: #bbb; border: 1px dashed #ccc; }
 QLabel:disabled { color: #bbb; }
+QListWidget::item:selected { background-color: #094771; color: #ffffff; }
 """
 
 
@@ -159,6 +191,7 @@ class MainWindow(QMainWindow):
     config_changed = pyqtSignal(dict)  # 配置改变信号
     reset_counters_requested = pyqtSignal()  # 重置计数器信号
     mode_changed = pyqtSignal(str)  # 模式切换信号 ("log"/"oscilloscope"/"mixed")
+    flash_requested = pyqtSignal()  # 烧录请求信号
     
     def __init__(self):
         super().__init__()
@@ -208,7 +241,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle(f'RTT Assistant v{__version__}')
+        self.setWindowTitle(f'{i18n("app.title")} v{__version__}')
         self.setGeometry(100, 100, 1000, 700)
         
         # 创建中心部件
@@ -300,28 +333,32 @@ class MainWindow(QMainWindow):
     
     def _create_toolbar(self):
         """创建工具栏"""
-        toolbar = QToolBar("工具栏")
+        toolbar = QToolBar(i18n("menu.toolbar"))
+        toolbar.setObjectName("mainToolBar")
         self.addToolBar(toolbar)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._toolbar = toolbar
         
-        # 禁用右键菜单
+        toolbar.setMovable(True)
+        toolbar.setFloatable(False)
         toolbar.setContextMenuPolicy(Qt.PreventContextMenu)
+        toolbar.setStyleSheet("QToolBar { spacing: 4px; padding: 2px; }")
         
         # 连接按钮 - 直接使用上次配置连接
-        self.connect_action = QAction("连接", self)
-        self.connect_action.setToolTip("使用上次配置连接")
+        self.connect_action = QAction(i18n("menu.connect"), self)
+        self.connect_action.setToolTip(i18n("tooltip.quick_connect"))
         self.connect_action.triggered.connect(self._on_quick_connect_clicked)
         toolbar.addAction(self.connect_action)
         
         # 配置按钮 - 打开配置对话框
-        config_action = QAction("配置", self)
-        config_action.setToolTip("配置连接参数")
-        config_action.triggered.connect(self._on_config_clicked)
-        toolbar.addAction(config_action)
+        self.config_action = QAction(i18n("menu.config"), self)
+        self.config_action.setToolTip(i18n("tooltip.config_params"))
+        self.config_action.triggered.connect(self._on_config_clicked)
+        toolbar.addAction(self.config_action)
         
         # 断开按钮
-        self.disconnect_action = QAction("断开", self)
-        self.disconnect_action.setToolTip("断开连接")
+        self.disconnect_action = QAction(i18n("menu.disconnect"), self)
+        self.disconnect_action.setToolTip(i18n("tooltip.disconnect"))
         self.disconnect_action.triggered.connect(self.disconnect_requested.emit)
         self.disconnect_action.setEnabled(False)
         toolbar.addAction(self.disconnect_action)
@@ -329,194 +366,262 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         
         # 清空按钮
-        clear_action = QAction("清空", self)
-        clear_action.setToolTip("清空接收区")
-        clear_action.triggered.connect(self._on_clear_clicked)
-        toolbar.addAction(clear_action)
+        self.clear_action = QAction(i18n("menu.clear"), self)
+        self.clear_action.setToolTip(i18n("tooltip.clear_receive"))
+        self.clear_action.triggered.connect(self._on_clear_clicked)
+        toolbar.addAction(self.clear_action)
         
         toolbar.addSeparator()
         
         # 显示模式切换
         self._mode_menu = QMenu(self)
-        self._mode_menu.addAction("日志")
-        self._mode_menu.addAction("示波器")
-        self._mode_menu.addAction("混合")
+        self._mode_log_action = QAction(i18n("mode.log"), self)
+        self._mode_log_action.setData("log")
+        self._mode_osc_action = QAction(i18n("mode.oscilloscope"), self)
+        self._mode_osc_action.setData("oscilloscope")
+        self._mode_mixed_action = QAction(i18n("mode.mixed"), self)
+        self._mode_mixed_action.setData("mixed")
+        self._mode_menu.addAction(self._mode_log_action)
+        self._mode_menu.addAction(self._mode_osc_action)
+        self._mode_menu.addAction(self._mode_mixed_action)
         self._mode_menu.triggered.connect(self._on_mode_menu_clicked)
 
-        self._mode_button = QPushButton("模式")
+        self._mode_button = QPushButton(i18n("menu.mode"))
         self._mode_button.setMenu(self._mode_menu)
         toolbar.addWidget(self._mode_button)
         
         toolbar.addSeparator()
         
+        # 烧录按钮
+        self.flash_action = toolbar.addAction(i18n("btn.flash"))
+        self.flash_action.setToolTip(i18n("tooltip.flash_firmware"))
+        self.flash_action.triggered.connect(self._on_flash_clicked)
+        self.flash_action.setEnabled(False)
+        
+
+        toolbar.addSeparator()
+        
         # 时间戳开关
-        self.timestamp_checkbox = QCheckBox("时间戳")
-        self.timestamp_checkbox.setToolTip("显示时间戳")
+        self.timestamp_checkbox = QCheckBox(i18n("btn.timestamp"))
+        self.timestamp_checkbox.setToolTip(i18n("tooltip.show_timestamp"))
         self.timestamp_checkbox.stateChanged.connect(
             lambda state: self.timestamp_toggled.emit(state == Qt.Checked)
         )
         toolbar.addWidget(self.timestamp_checkbox)
         
         # HEX显示开关
-        self.hex_display_checkbox = QCheckBox("HEX显示")
-        self.hex_display_checkbox.setToolTip("以HEX格式显示数据")
+        self.hex_display_checkbox = QCheckBox(i18n("btn.hex_display"))
+        self.hex_display_checkbox.setToolTip(i18n("tooltip.hex_display"))
         self.hex_display_checkbox.stateChanged.connect(
             lambda state: self.hex_display_toggled.emit(state == Qt.Checked)
         )
         toolbar.addWidget(self.hex_display_checkbox)
         
+        # 语言切换按钮
+        _cur = i18n_get_language()
+        self._lang_toggle_btn = QPushButton("EN" if _cur == "zh" else "中")
+        self._lang_toggle_btn.setToolTip(i18n("tooltip.switch_language"))
+        self._lang_toggle_btn.setFixedWidth(40)
+        self._lang_toggle_btn.clicked.connect(self._on_lang_toggle_clicked)
+        toolbar.addWidget(self._lang_toggle_btn)
+        
         toolbar.addSeparator()
         
         # 工具菜单
-        tool_menu = QMenu("工具", self)
+        self._tool_menu = QMenu(i18n("menu.tool"), self)
         
         # 字体设置
-        font_action = QAction("字体", self)
-        font_action.setToolTip("设置字体")
+        font_action = QAction(i18n("menu.font"), self)
+        font_action.setData("font")
+        font_action.setToolTip(i18n("tooltip.set_font"))
         font_action.triggered.connect(self._on_font_clicked)
-        tool_menu.addAction(font_action)
+        self._tool_menu.addAction(font_action)
         
-        tool_menu.addSeparator()
+        self._tool_menu.addSeparator()
         
         # 主题切换
-        theme_menu = QMenu("主题", self)
-        self._theme_dark_action = QAction("暗色", self)
+        theme_menu = QMenu(i18n("menu.theme"), self)
+        self._theme_dark_action = QAction(i18n("theme.dark"), self)
+        self._theme_dark_action.setData("dark")
         self._theme_dark_action.setCheckable(True)
-        self._theme_light_action = QAction("亮色", self)
+        self._theme_light_action = QAction(i18n("theme.light"), self)
+        self._theme_light_action.setData("light")
         self._theme_light_action.setCheckable(True)
         self._theme_group = QActionGroup(self)
         self._theme_group.addAction(self._theme_dark_action)
         self._theme_group.addAction(self._theme_light_action)
         self._theme_group.setExclusive(True)
         self._theme_group.triggered.connect(self._on_tools_theme_changed)
+
+        # Language menu
+        lang_menu = QMenu(i18n("menu.language"), self)
+        self._lang_zh_action = QAction("中文", self)
+        self._lang_zh_action.setData("zh")
+        self._lang_zh_action.setCheckable(True)
+        self._lang_en_action = QAction("English", self)
+        self._lang_en_action.setData("en")
+        self._lang_en_action.setCheckable(True)
+        self._lang_group = QActionGroup(self)
+        self._lang_group.addAction(self._lang_zh_action)
+        self._lang_group.addAction(self._lang_en_action)
+        self._lang_group.setExclusive(True)
+        self._lang_group.triggered.connect(self._on_language_menu_changed)
+        lang_menu.addAction(self._lang_zh_action)
+        lang_menu.addAction(self._lang_en_action)
+        self._tool_menu.addMenu(lang_menu)
+        _cur_lang = i18n_get_language()
+        self._lang_zh_action.setChecked(_cur_lang == "zh")
+        self._lang_en_action.setChecked(_cur_lang == "en")
+
         theme_menu.addAction(self._theme_dark_action)
         theme_menu.addAction(self._theme_light_action)
-        tool_menu.addMenu(theme_menu)
+        self._tool_menu.addMenu(theme_menu)
         
-        tool_menu.addSeparator()
+        self._tool_menu.addSeparator()
         
         # ANSI转义码染色开关
-        self.ansi_color_action = QAction("ANSI染色", self)
+        self.ansi_color_action = QAction(i18n("group.ansi_color"), self)
+        self.ansi_color_action.setData("ansi_color")
         self.ansi_color_action.setCheckable(True)
         self.ansi_color_action.setChecked(False)
-        self.ansi_color_action.setToolTip("解析ANSI转义码进行颜色渲染(默认关闭)")
-        tool_menu.addAction(self.ansi_color_action)
+        self.ansi_color_action.setToolTip(i18n("tooltip.ansi_color"))
+        self._tool_menu.addAction(self.ansi_color_action)
         
         # 关键字高亮(含子菜单)
-        keyword_menu = QMenu("关键字高亮", self)
+        keyword_menu = QMenu(i18n("group.keyword_highlight"), self)
         
-        self.keyword_highlight_action = QAction("启用", self)
+        self.keyword_highlight_action = QAction(i18n("btn.enable"), self)
+        self.keyword_highlight_action.setData("keyword_enable")
         self.keyword_highlight_action.setCheckable(True)
         self.keyword_highlight_action.setChecked(True)
-        self.keyword_highlight_action.setToolTip("启用关键字高亮(默认开启)")
+        self.keyword_highlight_action.setToolTip(i18n("tooltip.keyword_enable"))
         keyword_menu.addAction(self.keyword_highlight_action)
         
         keyword_menu.addSeparator()
         
-        keyword_config_action = QAction("规则配置", self)
-        keyword_config_action.setToolTip("配置关键字高亮规则")
+        keyword_config_action = QAction(i18n("group.keyword_rule_config"), self)
+        keyword_config_action.setData("keyword_config")
+        keyword_config_action.setToolTip(i18n("tooltip.keyword_config"))
         keyword_config_action.triggered.connect(self._on_keyword_highlight)
         keyword_menu.addAction(keyword_config_action)
         
-        tool_menu.addMenu(keyword_menu)
-        
+        self._tool_menu.addMenu(keyword_menu)
+
+        self._tool_menu.addSeparator()
+
+        self.reset_config_action = self._tool_menu.addAction(i18n("menu.reset_config") if hasattr(self, '_tool_menu') else "恢复默认配置")
+        self.reset_config_action.setToolTip("恢复所有配置为默认值并重启软件")
+        self.reset_config_requested = self.reset_config_action.triggered
+
         # 添加工具菜单按钮
-        tool_button = QPushButton("工具")
-        tool_button.setMenu(tool_menu)
-        toolbar.addWidget(tool_button)
+        self._tool_button = QPushButton(i18n("menu.tool"))
+        self._tool_button.setMenu(self._tool_menu)
+        toolbar.addWidget(self._tool_button)
         
         toolbar.addSeparator()
         
         # 帮助菜单
-        help_menu = QMenu("帮助", self)
+        self._help_menu = QMenu(i18n("menu.help"), self)
         
-        help_action = QAction("反馈", self)
-        help_action.setToolTip("Bug反馈：发送日志给作者")
+        help_action = QAction(i18n("group.feedback"), self)
+        help_action.setData("feedback")
+        help_action.setToolTip(i18n("tooltip.bug_feedback"))
         help_action.triggered.connect(self._on_help_contact)
-        help_menu.addAction(help_action)
+        self._help_menu.addAction(help_action)
         
-        usage_action = QAction("使用说明", self)
-        usage_action.setToolTip("打开使用说明文档")
+        usage_action = QAction(i18n("dialog.usage_doc"), self)
+        usage_action.setData("usage")
+        usage_action.setToolTip(i18n("tooltip.usage_doc"))
         usage_action.triggered.connect(self._on_usage_doc)
-        help_menu.addAction(usage_action)
+        self._help_menu.addAction(usage_action)
         
-        changelog_action = QAction("更新说明", self)
-        changelog_action.setToolTip("查看更新说明")
+        changelog_action = QAction(i18n("dialog.changelog"), self)
+        changelog_action.setData("changelog")
+        changelog_action.setToolTip(i18n("tooltip.changelog"))
         changelog_action.triggered.connect(self._on_changelog)
-        help_menu.addAction(changelog_action)
+        self._help_menu.addAction(changelog_action)
         
-        upgrade_action = QAction("升级指南", self)
-        upgrade_action.setToolTip("查看升级指南")
+        upgrade_action = QAction(i18n("dialog.upgrade_guide"), self)
+        upgrade_action.setData("upgrade")
+        upgrade_action.setToolTip(i18n("tooltip.upgrade_guide"))
         upgrade_action.triggered.connect(self._on_upgrade_guide)
-        help_menu.addAction(upgrade_action)
+        self._help_menu.addAction(upgrade_action)
         
-        help_menu.addSeparator()
+        self._help_menu.addSeparator()
         
         segger_menu = QMenu("SEGGER RTT", self)
         
-        rtt_intro_action = QAction("RTT介绍", self)
-        rtt_intro_action.setToolTip("打开SEGGER RTT官方文档")
+        rtt_intro_action = QAction(i18n("group.rtt_intro"), self)
+        rtt_intro_action.setData("rtt_intro")
+        rtt_intro_action.setToolTip(i18n("tooltip.rtt_intro"))
         rtt_intro_action.triggered.connect(self._on_rtt_intro)
         segger_menu.addAction(rtt_intro_action)
         
-        rtt_source_action = QAction("RTT源码", self)
-        rtt_source_action.setToolTip("查看SEGGER RTT源码")
+        rtt_source_action = QAction(i18n("group.rtt_source"), self)
+        rtt_source_action.setData("rtt_source")
+        rtt_source_action.setToolTip(i18n("tooltip.rtt_source"))
         rtt_source_action.triggered.connect(self._on_rtt_source)
         segger_menu.addAction(rtt_source_action)
         
-        rtt_porting_action = QAction("移植文档", self)
-        rtt_porting_action.setToolTip("查看SEGGER RTT移植指南")
+        rtt_porting_action = QAction(i18n("group.rtt_porting"), self)
+        rtt_porting_action.setData("rtt_porting")
+        rtt_porting_action.setToolTip(i18n("tooltip.rtt_porting"))
         rtt_porting_action.triggered.connect(self._on_rtt_porting)
         segger_menu.addAction(rtt_porting_action)
         
-        help_menu.addMenu(segger_menu)
+        self._help_menu.addMenu(segger_menu)
         
-        help_menu.addSeparator()
+        self._help_menu.addSeparator()
         
         # 依赖管理
-        dep_manage_action = QAction("依赖管理", self)
-        dep_manage_action.setToolTip("管理运行时依赖和升级")
+        dep_manage_action = QAction(i18n("group.dep_manage"), self)
+        dep_manage_action.setData("dep_manage")
+        dep_manage_action.setToolTip(i18n("tooltip.dep_manage"))
         dep_manage_action.triggered.connect(self._on_dependency_manage)
-        help_menu.addAction(dep_manage_action)
+        self._help_menu.addAction(dep_manage_action)
         
-        help_menu.addSeparator()
+        self._help_menu.addSeparator()
         
         # 关于
-        about_action = QAction("关于", self)
-        about_action.setToolTip("关于RTT Assistant")
+        about_action = QAction(i18n("group.about"), self)
+        about_action.setData("about")
+        about_action.setToolTip(i18n("tooltip.about"))
         about_action.triggered.connect(self._on_about)
-        help_menu.addAction(about_action)
+        self._help_menu.addAction(about_action)
         
         # 添加帮助菜单按钮
-        help_button = QPushButton("帮助")
-        help_button.setMenu(help_menu)
-        toolbar.addWidget(help_button)
+        self._help_button = QPushButton(i18n("menu.help"))
+        self._help_button.setMenu(self._help_menu)
+        toolbar.addWidget(self._help_button)
         
         toolbar.addSeparator()
         
         # 日志菜单
-        log_menu = QMenu("日志", self)
+        self._log_menu = QMenu(i18n("menu.log"), self)
         
         # 系统日志
-        system_log_action = QAction("系统日志", self)
-        system_log_action.setToolTip("显示系统日志窗口")
+        system_log_action = QAction(i18n("group.system_log"), self)
+        system_log_action.setData("system_log")
+        system_log_action.setToolTip(i18n("tooltip.system_log"))
         system_log_action.triggered.connect(self._on_log_clicked)
-        log_menu.addAction(system_log_action)
+        self._log_menu.addAction(system_log_action)
         
         # 收发数据日志
-        data_log_action = QAction("收发数据日志", self)
-        data_log_action.setToolTip("打开收发数据日志文件夹")
+        data_log_action = QAction(i18n("group.data_log"), self)
+        data_log_action.setData("data_log")
+        data_log_action.setToolTip(i18n("tooltip.data_log"))
         data_log_action.triggered.connect(self._on_open_data_log_folder)
-        log_menu.addAction(data_log_action)
+        self._log_menu.addAction(data_log_action)
         
-        log_manage_action = QAction("日志管理", self)
+        log_manage_action = QAction(i18n("group.log_manage"), self)
+        log_manage_action.setData("log_manage")
         log_manage_action.triggered.connect(self._on_log_manage_clicked)
-        log_menu.addAction(log_manage_action)
+        self._log_menu.addAction(log_manage_action)
         
         # 添加日志菜单按钮
-        log_button = QPushButton("日志")
-        log_button.setMenu(log_menu)
-        toolbar.addWidget(log_button)
+        self._log_button = QPushButton(i18n("menu.log"))
+        self._log_button.setMenu(self._log_menu)
+        toolbar.addWidget(self._log_button)
 
         # 弹性空间将置顶按钮推到最右
         spacer = QWidget()
@@ -525,14 +630,14 @@ class MainWindow(QMainWindow):
 
         # 窗口置顶按钮（书钉图标）
         self._pin_btn = QPushButton("📌")
-        self._pin_btn.setToolTip("窗口置顶")
+        self._pin_btn.setToolTip(i18n("tooltip.window_topmost"))
         self._pin_btn.setCheckable(True)
         self._pin_btn.toggled.connect(self._on_pin_toggled)
         toolbar.addWidget(self._pin_btn)
     
     def _create_receive_area(self):
         """创建接收区"""
-        self._receive_group = QGroupBox("接收区 (CH0)")
+        self._receive_group = QGroupBox(i18n("group.receive"))
         layout = QVBoxLayout(self._receive_group)
         
         self.receive_text = QTextEdit()
@@ -544,7 +649,7 @@ class MainWindow(QMainWindow):
     
     def _create_send_area(self):
         """创建发送区"""
-        self._send_group = QGroupBox("发送区 (CH0↓)")
+        self._send_group = QGroupBox(i18n("group.send"))
         layout = QVBoxLayout(self._send_group)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(3)
@@ -553,7 +658,7 @@ class MainWindow(QMainWindow):
         self.send_input = QTextEdit()
         self.send_input.setFont(QFont("Courier New", 10))
         self.send_input.setMinimumHeight(20)
-        self.send_input.setPlaceholderText("Enter=发送  Shift+Enter=换行")
+        self.send_input.setPlaceholderText(i18n("placeholder.send_input"))
         self.send_input.installEventFilter(self)
         layout.addWidget(self.send_input)
         
@@ -562,25 +667,27 @@ class MainWindow(QMainWindow):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(4)
         
-        bottom_layout.addWidget(QLabel("模式:"))
+        self._mode_label = QLabel(i18n("label.mode"))
+        bottom_layout.addWidget(self._mode_label)
         
         self.send_mode_combo = QComboBox()
-        self.send_mode_combo.addItems(["字符串", "HEX"])
-        self.send_mode_combo.setToolTip("发送模式")
+        self.send_mode_combo.addItem(i18n("combo.send_string"), "string")
+        self.send_mode_combo.addItem(i18n("combo.send_hex"), "hex")
+        self.send_mode_combo.setToolTip(i18n("tooltip.send_mode"))
         fm = self.send_mode_combo.fontMetrics()
-        self.send_mode_combo.setMinimumWidth(fm.horizontalAdvance("字符串") + 30)
+        self.send_mode_combo.setMinimumWidth(fm.horizontalAdvance(i18n("combo.send_string")) + 30)
         bottom_layout.addWidget(self.send_mode_combo)
         
-        self.add_newline_checkbox = QCheckBox("加换行")
-        self.add_newline_checkbox.setToolTip("发送时自动添加换行符")
+        self.add_newline_checkbox = QCheckBox(i18n("btn.add_newline"))
+        self.add_newline_checkbox.setToolTip(i18n("tooltip.add_newline"))
         bottom_layout.addWidget(self.add_newline_checkbox)
         
         bottom_layout.addStretch()
         
-        send_btn = QPushButton("发送")
-        send_btn.setToolTip("发送数据 (或按 Enter 直接发送)\nShift+Enter 换行")
-        send_btn.clicked.connect(self._on_send_clicked)
-        bottom_layout.addWidget(send_btn)
+        self.send_btn = QPushButton(i18n("btn.send"))
+        self.send_btn.setToolTip(i18n("tooltip.send_data"))
+        self.send_btn.clicked.connect(self._on_send_clicked)
+        bottom_layout.addWidget(self.send_btn)
         
         layout.addLayout(bottom_layout)
         
@@ -594,7 +701,7 @@ class MainWindow(QMainWindow):
         # 创建状态标签
         self.status_label = QLabel()
         self.status_bar.addWidget(self.status_label)
-        self.set_status("未连接")
+        self.set_status(STATUS_DISCONNECTED)
         
         # 添加分隔符
         self.status_bar.addWidget(QLabel("  |  "))
@@ -614,8 +721,8 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(QLabel("  |  "))
         
         # 重置按钮
-        self.reset_btn = QPushButton("重置")
-        self.reset_btn.setToolTip("重置收发计数")
+        self.reset_btn = QPushButton(i18n("btn.reset"))
+        self.reset_btn.setToolTip(i18n("tooltip.reset_counters"))
         self.reset_btn.clicked.connect(self.reset_counters_requested.emit)
         self.status_bar.addWidget(self.reset_btn)
         
@@ -661,12 +768,127 @@ class MainWindow(QMainWindow):
                 if w is not self:
                     set_dark_title_bar(w, dark)
         self.waveform_widget.set_color_theme(theme)
+        # Connect i18n signal (only once)
+        _sig = i18n_language_changed()
+        if _sig and not hasattr(self, '_i18n_connected'):
+            _sig.connect(self._refresh_on_language_changed)
+            self._i18n_connected = True
         if hasattr(self, '_theme_group'):
             self._theme_dark_action.setChecked(theme == 'dark')
             self._theme_light_action.setChecked(theme == 'light')
 
+    
+    def _on_language_menu_changed(self, action):
+        lang = action.data() or "zh"
+        i18n_set_language(lang)
+
+    def _on_lang_toggle_clicked(self):
+        current = i18n_get_language()
+        new_lang = "en" if current == "zh" else "zh"
+        i18n_set_language(new_lang)
+
+    def _refresh_on_language_changed(self, lang):
+        """语言变更时刷新所有UI文本"""
+        # Toolbar actions
+        self.connect_action.setText(i18n("menu.connect"))
+        self.connect_action.setToolTip(i18n("tooltip.quick_connect"))
+        self.config_action.setText(i18n("menu.config"))
+        self.config_action.setToolTip(i18n("tooltip.config_params"))
+        self.disconnect_action.setText(i18n("menu.disconnect"))
+        self.disconnect_action.setToolTip(i18n("tooltip.disconnect"))
+        self.clear_action.setText(i18n("menu.clear"))
+        self.clear_action.setToolTip(i18n("tooltip.clear_receive"))
+        # Mode menu
+        for act in self._mode_menu.actions():
+            mode = act.data()
+            if mode == "log":
+                act.setText(i18n("mode.log"))
+            elif mode == "oscilloscope":
+                act.setText(i18n("mode.oscilloscope"))
+            elif mode == "mixed":
+                act.setText(i18n("mode.mixed"))
+        # Theme actions
+        self._theme_dark_action.setText(i18n("theme.dark"))
+        self._theme_light_action.setText(i18n("theme.light"))
+        # Language actions
+        self._lang_zh_action.setChecked(lang == "zh")
+        self._lang_en_action.setChecked(lang == "en")
+        # Language toggle button
+        self._lang_toggle_btn.setText("EN" if lang == "zh" else "中")
+        self._lang_toggle_btn.setToolTip(i18n("tooltip.switch_language"))
+        # Status bar
+        if hasattr(self, '_current_status_id'):
+            self.set_status(self._current_status_id, getattr(self, '_current_status_detail', ''))
+        # Group boxes
+        if hasattr(self, '_receive_group'):
+            self._receive_group.setTitle(i18n("group.receive"))
+        if hasattr(self, '_send_group'):
+            self._send_group.setTitle(i18n("group.send"))
+        # Send area
+        if hasattr(self, '_mode_label'):
+            self._mode_label.setText(i18n("label.mode"))
+        self.send_mode_combo.setItemText(0, i18n("combo.send_string"))
+        self.send_mode_combo.setItemText(1, i18n("combo.send_hex"))
+        if hasattr(self, 'add_newline_checkbox'):
+            self.add_newline_checkbox.setText(i18n("btn.add_newline"))
+        self.send_input.setPlaceholderText(i18n("placeholder.send_input"))
+        # Send/Reset buttons
+        if hasattr(self, 'send_btn'):
+            self.send_btn.setText(i18n("btn.send"))
+            self.send_btn.setToolTip(i18n("tooltip.send_data"))
+        if hasattr(self, 'reset_btn'):
+            self.reset_btn.setText(i18n("btn.reset"))
+            self.reset_btn.setToolTip(i18n("tooltip.reset_counters"))
+        # Checkboxes
+        if hasattr(self, 'timestamp_checkbox'):
+            self.timestamp_checkbox.setText(i18n("btn.timestamp"))
+        if hasattr(self, 'hex_display_checkbox'):
+            self.hex_display_checkbox.setText(i18n("btn.hex_display"))
+        # Buttons
+        if hasattr(self, '_mode_button'):
+            self._mode_button.setText(i18n("menu.mode"))
+        if hasattr(self, '_tool_button'):
+            self._tool_button.setText(i18n("menu.tool"))
+        if hasattr(self, '_help_button'):
+            self._help_button.setText(i18n("menu.help"))
+        if hasattr(self, '_log_button'):
+            self._log_button.setText(i18n("menu.log"))
+        # Tool menu actions
+        if hasattr(self, '_tool_menu'):
+            self._tool_menu.setTitle(i18n("menu.tool"))
+            for act in self._tool_menu.actions():
+                d = act.data()
+                if d == "font": act.setText(i18n("menu.font")); act.setToolTip(i18n("tooltip.set_font"))
+                elif d == "ansi_color": act.setText(i18n("group.ansi_color")); act.setToolTip(i18n("tooltip.ansi_color"))
+                elif d == "keyword_enable": act.setText(i18n("btn.enable")); act.setToolTip(i18n("tooltip.keyword_enable"))
+                elif d == "keyword_config": act.setText(i18n("group.keyword_rule_config")); act.setToolTip(i18n("tooltip.keyword_config"))
+        # Help menu actions
+        if hasattr(self, '_help_menu'):
+            self._help_menu.setTitle(i18n("menu.help"))
+            for act in self._help_menu.actions():
+                d = act.data()
+                if d == "feedback": act.setText(i18n("group.feedback")); act.setToolTip(i18n("tooltip.bug_feedback"))
+                elif d == "usage": act.setText(i18n("dialog.usage_doc")); act.setToolTip(i18n("tooltip.usage_doc"))
+                elif d == "changelog": act.setText(i18n("dialog.changelog")); act.setToolTip(i18n("tooltip.changelog"))
+                elif d == "upgrade": act.setText(i18n("dialog.upgrade_guide")); act.setToolTip(i18n("tooltip.upgrade_guide"))
+                elif d == "rtt_intro": act.setText(i18n("group.rtt_intro")); act.setToolTip(i18n("tooltip.rtt_intro"))
+                elif d == "rtt_source": act.setText(i18n("group.rtt_source")); act.setToolTip(i18n("tooltip.rtt_source"))
+                elif d == "rtt_porting": act.setText(i18n("group.rtt_porting")); act.setToolTip(i18n("tooltip.rtt_porting"))
+                elif d == "dep_manage": act.setText(i18n("group.dep_manage")); act.setToolTip(i18n("tooltip.dep_manage"))
+                elif d == "about": act.setText(i18n("group.about")); act.setToolTip(i18n("tooltip.about"))
+        # Log menu actions
+        if hasattr(self, '_log_menu'):
+            self._log_menu.setTitle(i18n("menu.log"))
+            for act in self._log_menu.actions():
+                d = act.data()
+                if d == "system_log": act.setText(i18n("group.system_log")); act.setToolTip(i18n("tooltip.system_log"))
+                elif d == "data_log": act.setText(i18n("group.data_log")); act.setToolTip(i18n("tooltip.data_log"))
+                elif d == "log_manage": act.setText(i18n("group.log_manage"))
+        # Window title
+        self.setWindowTitle(f'{i18n("app.title")} v{__version__}')
+
     def _on_tools_theme_changed(self, action):
-        theme = 'dark' if action.text() == '暗色' else 'light'
+        theme = action.data() or 'dark'
         self.set_app_theme(theme)
         self.waveform_widget.theme_changed.emit(theme)
 
@@ -704,6 +926,21 @@ class MainWindow(QMainWindow):
             speed=self.last_config.get('speed', 4000)
         )
         
+        # 恢复固件路径到配置对话框（优先从config_service读取，确保持久化恢复）
+        try:
+            from ..utils.config_service import ConfigService
+            from ..runtime.path_config import RUNTIME_CONFIG_JSON
+            cs = ConfigService(RUNTIME_CONFIG_JSON)
+            cs.load()
+            firmware_paths = cs.get('firmware_paths', [])
+            active_firmware_index = cs.get('active_firmware_index', -1)
+        except Exception:
+            firmware_paths = self.last_config.get('firmware_paths', [])
+            active_firmware_index = self.last_config.get('active_firmware_index', -1)
+        if firmware_paths:
+            dialog.firmware_path_panel.set_firmware_paths(firmware_paths, active_firmware_index)
+        
+
         if self.log_service:
             self.log_service.debug(f"[性能] 创建对话框完成: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         
@@ -713,6 +950,7 @@ class MainWindow(QMainWindow):
             # 保存配置
             self.last_config = config
             self.config_changed.emit(config)
+
     
     def _on_disconnect_clicked(self):
         """断开按钮点击"""
@@ -720,12 +958,19 @@ class MainWindow(QMainWindow):
     
     def _on_mode_menu_clicked(self, action):
         """模式菜单点击"""
-        text_to_mode = {"日志": "log", "示波器": "oscilloscope", "混合": "mixed"}
-        new_mode = text_to_mode.get(action.text())
+        new_mode = action.data()
         if new_mode is None:
             return
         self._mode_button.setText(action.text())
         self._apply_mode(new_mode)
+
+    def _on_flash_clicked(self):
+        """烧录按钮点击"""
+        self.flash_requested.emit()
+
+    def set_flash_button_enabled(self, enabled: bool):
+        """设置烧录按钮启用状态"""
+        self.flash_action.setEnabled(enabled)
 
     def _on_mode_changed(self, index):
         """显示模式切换（保留兼容，实际由 _on_mode_menu_clicked 代替）"""
@@ -733,7 +978,7 @@ class MainWindow(QMainWindow):
         if not (0 <= index < len(modes)):
             return
         new_mode = modes[index]
-        self._mode_button.setText(["日志", "示波器", "混合"][index])
+        self._mode_button.setText([i18n("mode.log"), i18n("mode.oscilloscope"), i18n("mode.mixed")][index])
         self._apply_mode(new_mode)
 
     def _apply_mode(self, new_mode):
@@ -805,7 +1050,7 @@ class MainWindow(QMainWindow):
         if not text:
             return
         
-        is_hex = self.send_mode_combo.currentText() == "HEX"
+        is_hex = self.send_mode_combo.currentData() == "hex"
         add_newline = self.add_newline_checkbox.isChecked()
         
         # HEX模式验证
@@ -815,21 +1060,21 @@ class MainWindow(QMainWindow):
             
             # 验证是否为空
             if not hex_str:
-                QMessageBox.warning(self, "HEX格式错误", "HEX数据不能为空")
+                QMessageBox.warning(self, i18n("error.hex_format"), i18n("error.hex_empty"))
                 return
             
             # 验证是否为偶数长度
             if len(hex_str) % 2 != 0:
-                QMessageBox.warning(self, "HEX格式错误", 
-                    f"HEX数据长度必须为偶数\n当前长度: {len(hex_str)}个字符\n\n请检查输入数据")
+                QMessageBox.warning(self, i18n("error.hex_format"), 
+                    i18n("error.hex_odd_length").format(len(hex_str)))
                 return
             
             # 验证是否都是有效的十六进制字符
             valid_chars = set('0123456789ABCDEFabcdef')
             invalid_chars = set(hex_str) - valid_chars
             if invalid_chars:
-                QMessageBox.warning(self, "HEX格式错误", 
-                    f"包含非法字符: {invalid_chars}\n\nHEX数据只能包含0-9和A-F(或a-f)")
+                QMessageBox.warning(self, i18n("error.hex_format"), 
+                    i18n("error.hex_invalid_char").format(invalid_chars))
                 return
         
         self.send_requested.emit(text, is_hex, add_newline)
@@ -849,7 +1094,7 @@ class MainWindow(QMainWindow):
         """字体按钮点击"""
         from PyQt5.QtWidgets import QFontDialog
         dialog = QFontDialog(self.receive_text.font(), self)
-        dialog.setWindowTitle("选择字体")
+        dialog.setWindowTitle(i18n("dialog.select_font"))
         set_dark_title_bar(dialog, getattr(self, '_current_theme', 'dark') == 'dark')
         if dialog.exec_():
             font = dialog.selectedFont()
@@ -857,19 +1102,19 @@ class MainWindow(QMainWindow):
             self.font_changed.emit(font)
     
     def _on_keyword_highlight(self):
-        """关键字高亮配置"""
+        """关键字高亮配置对话框"""
         from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, 
                                      QTableWidgetItem, QPushButton, QHeaderView, QColorDialog)
         from PyQt5.QtGui import QColor
         
         dialog = QDialog(self)
-        dialog.setWindowTitle("关键字高亮配置")
+        dialog.setWindowTitle(i18n("dialog.keyword_config"))
         dialog.resize(500, 350)
         set_dark_title_bar(dialog, getattr(self, '_current_theme', 'dark') == 'dark')
         layout = QVBoxLayout(dialog)
         
         table = QTableWidget(0, 2)
-        table.setHorizontalHeaderLabels(["关键字", "颜色"])
+        table.setHorizontalHeaderLabels([i18n("header.keyword"), i18n("header.color")])
         table.horizontalHeader().setStretchLastSection(True)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         
@@ -896,7 +1141,7 @@ class MainWindow(QMainWindow):
         
         btn_layout = QHBoxLayout()
         
-        add_btn = QPushButton("添加")
+        add_btn = QPushButton(i18n("btn.add"))
         def on_add():
             row = table.rowCount()
             table.insertRow(row)
@@ -905,15 +1150,15 @@ class MainWindow(QMainWindow):
         add_btn.clicked.connect(on_add)
         btn_layout.addWidget(add_btn)
         
-        del_btn = QPushButton("删除")
+        del_btn = QPushButton(i18n("btn.delete"))
         del_btn.clicked.connect(lambda: table.removeRow(table.currentRow()) if table.currentRow() >= 0 else None)
         btn_layout.addWidget(del_btn)
         
-        color_btn = QPushButton("选择颜色")
+        color_btn = QPushButton(i18n("btn.select_color"))
         def on_pick_color():
             row = table.currentRow()
             if row >= 0:
-                color = QColorDialog.getColor(QColor("#ff0000"), dialog, "选择颜色")
+                color = QColorDialog.getColor(QColor("#ff0000"), dialog, i18n("btn.select_color"))
                 if color.isValid():
                     table.item(row, 1).setText(color.name())
                     table.item(row, 1).setForeground(color)
@@ -924,7 +1169,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(table)
         layout.addLayout(btn_layout)
         
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton(i18n("btn.ok"))
         ok_layout = QHBoxLayout()
         ok_layout.addStretch()
         ok_layout.addWidget(ok_btn)
@@ -1137,19 +1382,19 @@ class MainWindow(QMainWindow):
         self.disconnect_action.setEnabled(connected)
         
         if connected:
-            self.set_status("已连接")
+            self.set_status(STATUS_CONNECTED)
             self._update_probe_info()
         else:
-            self.set_status("未连接")
+            self.set_status(STATUS_DISCONNECTED)
     
-    def set_status(self, text):
+    def set_status(self, status_id, detail=""):
+        self._current_status_id = status_id
+        self._current_status_detail = detail
+        text = i18n(_STATUS_KEY_MAP.get(status_id, status_id))
+        if detail:
+            text = f"{text} - {detail}"
         self.status_label.setText(text)
-        color_map = {
-            "未连接": "#888888",
-            "连接中": "#FF8800",
-            "已连接": "#00AA00",
-        }
-        bg = color_map.get(text, "")
+        bg = _STATUS_COLOR_MAP.get(status_id, "")
         if bg:
             self.status_label.setStyleSheet(
                 f"background-color: {bg}; color: #ffffff; padding: 0 6px; font-weight: bold; border-radius: 2px;"
@@ -1159,7 +1404,7 @@ class MainWindow(QMainWindow):
     
     def update_receive_group_title(self, ch_name: str = "", buf_size: int = 0):
         """更新接收区GroupBox标题: 显示通道名+缓冲区大小"""
-        parts = ["接收区 (CH0"]
+        parts = [i18n("label.receive_area_prefix")]
         if ch_name:
             parts.append(f' "{ch_name}"')
         if buf_size > 0:
@@ -1169,13 +1414,13 @@ class MainWindow(QMainWindow):
     
     def update_send_group_title(self, ch_name: str = "", buf_size: int = 0):
         """更新发送区GroupBox标题: 显示下行通道名+缓冲区大小"""
-        parts = ["发送区 (CH0↓"]
+        parts = [i18n("label.send_area_prefix")]
         if ch_name:
             parts.append(f' "{ch_name}"')
         if buf_size > 0:
             parts.append(f" {buf_size}B")
         else:
-            parts.append(" 未配置↓")
+            parts.append(i18n("label.send_area_no_down"))
         parts.append(")")
         self._send_group.setTitle("".join(parts))
     
@@ -1226,8 +1471,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'config_service') and self.config_service:
             saved = self.config_service.get('display_mode', 'log')
             if saved in ('log', 'oscilloscope', 'mixed') and saved != self._current_mode:
-                mode_names = {'log': '日志', 'oscilloscope': '示波器', 'mixed': '混合'}
-                self._mode_button.setText(mode_names.get(saved, '模式'))
+                mode_names = {'log': i18n('mode.log'), 'oscilloscope': i18n('mode.oscilloscope'), 'mixed': i18n('mode.mixed')}
+                self._mode_button.setText(mode_names.get(saved, i18n("menu.mode")))
                 self._apply_mode(saved)
     
     def _on_log_clicked(self):
@@ -1251,6 +1496,11 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
+        if hasattr(self, '_save_geometry_callback'):
+            try:
+                self._save_geometry_callback()
+            except Exception:
+                pass
         if hasattr(self, '_log_throttle_timer'):
             self._log_throttle_timer.stop()
         if hasattr(self, '_flush_pending_log_text'):
@@ -1271,46 +1521,52 @@ class MainWindow(QMainWindow):
     def _on_help_contact(self):
         from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton, QHBoxLayout
         dlg = QDialog(self)
-        dlg.setWindowTitle("Bug反馈")
-        dlg.setFixedSize(320, 130)
+        dlg.setWindowTitle(i18n("dialog.bug_feedback"))
+        dlg.setMinimumWidth(320)
+        dlg.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         layout = QVBoxLayout(dlg)
-        layout.addWidget(QLabel("如遇Bug，请将log文件夹发送至：可复制邮箱"))
+        layout.addWidget(QLabel(i18n("label.bug_feedback_hint")))
         email_label = QLabel('<b>292812832@qq.com</b>')
         email_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(email_label)
-        layout.addWidget(QLabel("我们会尽快修复。"))
+        layout.addWidget(QLabel(i18n("label.will_fix_soon")))
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        ok_btn = QPushButton('确定')
+        ok_btn = QPushButton(i18n("btn.ok"))
         ok_btn.clicked.connect(dlg.accept)
         btn_layout.addWidget(ok_btn)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
         dlg.exec_()
 
+    def _get_doc_path(self, zh_name: str, en_name: str) -> str:
+        lang = i18n_get_language()
+        doc_name = en_name if lang == "en" else zh_name
+        return get_resource_path(f"doc/{doc_name}")
+
     def _on_usage_doc(self):
         import os
-        doc_file = get_resource_path("doc/使用说明.html")
+        doc_file = self._get_doc_path("使用说明.html", "Usage Guide.html")
         if doc_file and os.path.exists(doc_file):
             os.startfile(doc_file)
         else:
-            QMessageBox.information(self, "使用说明", "文档未找到，请查看doc/目录")
+            QMessageBox.information(self, i18n("dialog.usage_doc"), i18n("error.doc_not_found"))
 
     def _on_changelog(self):
         import os
-        doc_file = get_resource_path("doc/更新说明.html")
+        doc_file = self._get_doc_path("更新说明.html", "Changelog.html")
         if doc_file and os.path.exists(doc_file):
             os.startfile(doc_file)
         else:
-            QMessageBox.information(self, "更新说明", "文档未找到，请查看doc/目录")
+            QMessageBox.information(self, i18n("dialog.changelog"), i18n("error.doc_not_found"))
 
     def _on_upgrade_guide(self):
         import os
-        doc_file = get_resource_path("doc/升级指南.html")
+        doc_file = self._get_doc_path("升级指南.html", "Upgrade Guide.html")
         if doc_file and os.path.exists(doc_file):
             os.startfile(doc_file)
         else:
-            QMessageBox.information(self, "升级指南", "文档未找到，请查看doc/目录")
+            QMessageBox.information(self, i18n("dialog.upgrade_guide"), i18n("error.doc_not_found"))
     
     def _on_open_data_log_folder(self):
         """打开收发数据日志文件夹"""
@@ -1434,7 +1690,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(self, '错误', f'打开依赖管理失败: {e}')
+            QMessageBox.warning(self, i18n("dialog.error_title"), f'{i18n("error.open_dep_manage_failed")}: {e}')
 
     def _on_about(self):
         """显示关于对话框"""
@@ -1449,7 +1705,7 @@ class MainWindow(QMainWindow):
         
         # 创建自定义对话框
         dialog = QDialog(self)
-        dialog.setWindowTitle("关于 RTT Assistant")
+        dialog.setWindowTitle(i18n("dialog.about"))
         dialog.setFixedSize(450, 500)
         set_dark_title_bar(dialog, getattr(self, '_current_theme', 'dark') == 'dark')
         
@@ -1461,7 +1717,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         
         # 版本信息
-        version = QLabel(f"<p>版本: v{__version__}</p><p>RTT调试助手</p><p>基于SEGGER JLink RTT技术</p>")
+        version = QLabel(f"<p>{i18n('label.version_info').format(__version__)} v{__version__}</p><p>{i18n('label.rtt_assistant_desc')}</p><p>{i18n('label.based_on_segger_rtt')}</p>")
         version.setAlignment(Qt.AlignCenter)
         layout.addWidget(version)
         
@@ -1483,7 +1739,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("<hr>"))
         
         # 作者信息
-        author = QLabel("<p><b>作者:</b> 陈卡卡</p>")
+        author = QLabel(f"<p><b>{i18n('label.author')}</b> {i18n('label.author_name')}</p>")
         author.setAlignment(Qt.AlignCenter)
         layout.addWidget(author)
         
@@ -1519,7 +1775,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("<hr>"))
 
         # 检查更新按钮
-        check_update_btn = QPushButton("检查更新")
+        check_update_btn = QPushButton(i18n("btn.check_update"))
         check_update_btn.clicked.connect(lambda: self._on_check_update(dialog))
         layout.addWidget(check_update_btn)
 
@@ -1529,7 +1785,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(copyright_label)
         
         # 确定按钮
-        ok_btn = QPushButton("确定")
+        ok_btn = QPushButton(i18n("btn.ok"))
         ok_btn.clicked.connect(dialog.accept)
         layout.addWidget(ok_btn)
         
@@ -1550,13 +1806,13 @@ class MainWindow(QMainWindow):
         
         # 创建对话框
         dialog = QDialog(parent)
-        dialog.setWindowTitle("公众号: 嵌入式科普")
+        dialog.setWindowTitle(i18n("label.wechat_public"))
         dialog.setFixedSize(350, 400)
         
         layout = QVBoxLayout(dialog)
         
         # 标题
-        title = QLabel("<h3>扫码关注公众号</h3>")
+        title = QLabel(f"<h3>{i18n('label.scan_qrcode')}</h3>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
@@ -1573,15 +1829,15 @@ class MainWindow(QMainWindow):
                 scaled_pixmap = pixmap.scaled(280, 280, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 qrcode_label.setPixmap(scaled_pixmap)
             else:
-                qrcode_label.setText("无法加载二维码图片")
+                qrcode_label.setText(i18n("label.cannot_load_qrcode"))
         else:
-            qrcode_label.setText("未找到二维码图片")
+            qrcode_label.setText(i18n("label.qrcode_not_found"))
         
         qrcode_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(qrcode_label)
         
         # 提示
-        tip = QLabel("<p>公众号: <b>嵌入式科普</b></p>")
+        tip = QLabel(f"<p>{i18n('label.wechat')} <b>{i18n('label.wechat_name')}</b></p>")
         tip.setAlignment(Qt.AlignCenter)
         layout.addWidget(tip)
         
@@ -1594,7 +1850,7 @@ class MainWindow(QMainWindow):
         try:
             webbrowser.open(url)
         except Exception as e:
-            QMessageBox.warning(self, "错误", f"无法打开网页: {e}")
+            QMessageBox.warning(self, i18n("dialog.error_title"), f'{i18n("error.cannot_open_web")}: {e}')
     
     def _on_rtt_source(self):
         """打开SEGGER RTT源码"""
@@ -1603,19 +1859,16 @@ class MainWindow(QMainWindow):
 
         zip_path = os.path.join(RUNTIME_RESOURCES_DIR, 'RTT.zip')
         if os.path.isfile(zip_path):
-            QMessageBox.information(self, "SEGGER RTT 源码",
-                f"SEGGER RTT 源码包位置：\n\n{zip_path}\n\n"
-                f"请将此文件解压后集成到您的项目中。")
+            QMessageBox.information(self, i18n("dialog.rtt_source"),
+                i18n("error.rtt_source_location").format(zip_path))
             os.startfile(zip_path)
         else:
-            QMessageBox.warning(self, "未找到源码包",
-                f"未找到 RTT.zip\n\n"
-                f"预期路径：{zip_path}\n\n"
-                f"请将 RTT.zip 放入 resources/ 目录。")
+            QMessageBox.warning(self, i18n("dialog.rtt_source_not_found"),
+                i18n("error.rtt_zip_not_found").format(zip_path))
     
     def _on_rtt_porting(self):
         import os
-        guide_path = get_resource_path("doc/SEGGER_RTT移植指南.html")
+        guide_path = self._get_doc_path("SEGGER_RTT移植指南.html", "SEGGER_RTT Porting Guide.html")
         if guide_path and os.path.exists(guide_path):
             os.startfile(guide_path)
         else:
@@ -1623,19 +1876,19 @@ class MainWindow(QMainWindow):
     
     def _show_porting_doc(self):
         """显示SEGGER RTT移植文档"""
-        QMessageBox.information(self, "SEGGER RTT移植指南",
-            "<h3>SEGGER RTT移植步骤</h3>"
+        QMessageBox.information(self, i18n("dialog.rtt_porting_guide"),
+            "<h3>" + i18n("porting.step1") + "</h3>"
             "<ol>"
-            "<li><b>添加源码文件</b><br>"
-            "将SEGGER_RTT.c、SEGGER_RTT.h、SEGGER_RTT_Conf.h添加到工程</li>"
-            "<li><b>配置RTT</b><br>"
-            "修改SEGGER_RTT_Conf.h配置缓冲区大小和通道数</li>"
-            "<li><b>初始化RTT</b><br>"
-            "在main函数开头调用SEGGER_RTT_Init()</li>"
-            "<li><b>使用RTT输出</b><br>"
-            "使用SEGGER_RTT_printf()或SEGGER_RTT_Write()输出数据</li>"
-            "<li><b>连接JLink</b><br>"
-            "使用JLink RTT Viewer或RTT Assistant查看输出</li>"
+            "<li><b>" + i18n("porting.step1") + "</b><br>"
+            "" + i18n("porting.step1_desc") + "</li>"
+            "<li><b>" + i18n("porting.step2") + "</b><br>"
+            "" + i18n("porting.step2_desc") + "</li>"
+            "<li><b>" + i18n("porting.step3") + "</b><br>"
+            "" + i18n("porting.step3_desc") + "</li>"
+            "<li><b>" + i18n("porting.step4") + "</b><br>"
+            "" + i18n("porting.step4_desc") + "</li>"
+            "<li><b>" + i18n("porting.step5") + "</b><br>"
+            "" + i18n("porting.step5_desc") + "</li>"
             "</ol>"
             "<hr>"
             "<p><b>详细文档:</b> https://kb.segger.com/RTT</p>")
@@ -1654,9 +1907,9 @@ class MainWindow(QMainWindow):
         """导出收发数据"""
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "导出收发数据",
+            i18n("dialog.export_data"),
             "rtt_data.txt",
-            "文本文件 (*.txt);;所有文件 (*)"
+            f"{i18n('filter.text_file')} (*.txt);;{i18n('filter.all_file')} (*)"
         )
         
         if file_path:

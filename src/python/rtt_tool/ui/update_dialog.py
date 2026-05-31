@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
+from ..i18n import _ as i18n
 from ..utils.update_checker import (
     check_all_sources, parse_version, RELEASE_PAGE_URLS,
 )
@@ -45,22 +46,22 @@ class UpdateDialog(QDialog):
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
-        title = QLabel(f"<h3>检查更新</h3>")
+        title = QLabel(f"<h3>{i18n('dialog.check_update')}</h3>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
         self._ver_label = QLabel(
-            f'<p style="color:#888;">当前版本: v{self._current_version}</p>')
+            '<p style="color:#888;">' + i18n('label.current_version') + f' v{self._current_version}</p>')
         self._ver_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._ver_label)
 
-        self._status_label = QLabel("正在检查更新…")
+        self._status_label = QLabel(i18n("error.checking_update"))
         self._status_label.setAlignment(Qt.AlignCenter)
         self._status_label.setStyleSheet("color: #00AAFF;")
         layout.addWidget(self._status_label)
 
         self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["来源", "最新版本", "状态", "操作"])
+        self._table.setHorizontalHeaderLabels([i18n("header.source"), i18n("header.latest_version"), i18n("header.status"), i18n("header.action")])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -84,7 +85,7 @@ class UpdateDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _start_check(self):
-        self._status_label.setText("正在检查更新…")
+        self._status_label.setText(i18n("error.checking_update"))
         self._status_label.setStyleSheet("color: #00AAFF;")
         self._table.setVisible(False)
         self._retry_btn.setVisible(False)
@@ -102,9 +103,9 @@ class UpdateDialog(QDialog):
             self._table.setRowCount(1)
             self._table.setItem(0, 0, QTableWidgetItem("—"))
             self._table.setItem(0, 1, QTableWidgetItem("—"))
-            self._table.setItem(0, 2, QTableWidgetItem("检查失败"))
+            self._table.setItem(0, 2, QTableWidgetItem(i18n("error.check_failed")))
             self._table.setItem(0, 3, QTableWidgetItem(""))
-            msg = QTableWidgetItem("请检查网络连接后重试")
+            msg = QTableWidgetItem(i18n("error.check_network"))
             msg.setForeground(QColor("#888"))
             self._table.setItem(0, 3, msg)
             return
@@ -125,14 +126,14 @@ class UpdateDialog(QDialog):
             remote = parse_version(r["version"])
             row_newer = bool(remote and current and remote > current)
             if row_newer:
-                status = QTableWidgetItem("有新版本 ✓")
+                status = QTableWidgetItem(i18n("header.has_new_version") + " ✓")
                 status.setForeground(QColor("#00AA00"))
                 has_newer = True
             elif remote and current and remote == current:
-                status = QTableWidgetItem("已是最新")
+                status = QTableWidgetItem(i18n("header.is_latest"))
                 status.setForeground(QColor("#888"))
             else:
-                status = QTableWidgetItem("已是最新")
+                status = QTableWidgetItem(i18n("header.is_latest"))
                 status.setForeground(QColor("#888"))
             status.setTextAlignment(Qt.AlignCenter)
             self._table.setItem(row, 2, status)
@@ -141,11 +142,10 @@ class UpdateDialog(QDialog):
 
         if has_newer:
             self._ver_label.setText(
-                f'<p style="color:#00AA00; font-weight:bold;">'
-                f'发现新版本！当前: v{self._current_version}</p>')
+                '<p style="color:#00AA00; font-weight:bold;">' + i18n('label.new_version_found') + f' v{self._current_version}</p>')
         else:
             self._ver_label.setText(
-                f'<p style="color:#888;">当前版本: v{self._current_version}（已是最新）</p>')
+                '<p style="color:#888;">' + i18n('label.current_version_latest') + f' v{self._current_version}</p>')
 
     def _make_action_widget(self, r, has_newer):
         w = QWidget()
@@ -155,19 +155,19 @@ class UpdateDialog(QDialog):
 
         if has_newer:
             for f in r.get("files", []):
-                btn = QPushButton("复制链接")
-                btn.setToolTip(f"{r['source']}: {f['name']}\n点击复制下载链接")
+                btn = QPushButton(i18n("btn.copy_link"))
+                btn.setToolTip(f"{r['source']}: {f['name']}\n" + i18n("tooltip.click_copy_link"))
                 url = f["url"]
                 btn.clicked.connect(lambda checked, u=url, src=r["source"]: self._copy_link(u, src))
                 layout.addWidget(btn)
                 break
 
-        page_btn = QPushButton("打开页面")
+        page_btn = QPushButton(i18n("btn.open_page"))
         source_lower = r["source"].lower()
         if source_lower == "github":
-            page_btn.setToolTip("点击 Assets 选择文件，使用迅雷下载")
+            page_btn.setToolTip(i18n("tooltip.github_assets"))
         elif source_lower == "gitee":
-            page_btn.setToolTip("点击 下载 选择文件下载")
+            page_btn.setToolTip(i18n("tooltip.gitee_download"))
         page_url = RELEASE_PAGE_URLS.get(
             r["source"].lower(),
             r.get("url", ""))
@@ -180,9 +180,9 @@ class UpdateDialog(QDialog):
         QApplication.clipboard().setText(url)
         hint = ""
         if source in ("github", "GitHub"):
-            hint = "（推荐使用迅雷下载）"
-        QMessageBox.information(self, "链接已复制",
-                                f"下载链接已复制到剪贴板{hint}\n\n{url}")
+            hint = i18n("error.recommend_thunder")
+        QMessageBox.information(self, i18n("dialog.link_copied"),
+                                i18n("error.link_copied_to_clipboard").format(hint, url))
 
     def _open_page(self, url):
         import webbrowser

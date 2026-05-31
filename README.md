@@ -1,18 +1,20 @@
+**[English](README_EN.md) | 简体中文**
 # RTT Assistant
 
 ## 介绍
 - **RTT Assistant**是一个功能丰富的RTT(Real Time Transfer)调试工具，通过J-Link或DAP-Link/ST-Link等调试器与MCU进行RTT通信。
 - **RTT Assistant对标Segger**的相关产品，主要**扩展多种调试**支持和**人性化功能**的支持。
-- 目前测试和验证了3种调试器：**J-Link、DAP-Link、ST-Link**。
+- 目前测试和验证了4种调试器：**J-Link、DAP-Link、ST-Link、ATK-DAP(正点原子)**。芯片**RA8P1、STM32U575、GD32F427**已验证.
   
 <div style="display: flex; justify-content: center;">
     <img src="./images/Debug support list.png" style="width: 50%;">
 </div>
 
-<div style="display: flex; gap: 5%; justify-content: center; align-items: center; width: 100%;">
-    <img src="./images/NUCLEO-U575ZI-Q.jpg" style="width: 28%; height: auto;" />
-    <img src="./images/RT-Thread Titan Board.jpg" style="width: 28%; height: auto;" />
-    <img src="./images/EK-RA8P1.jpg" style="width: 28%; height: auto;" />
+<div style="display: flex; gap: 5%; justify-content: center; align-items: center; flex-wrap: wrap; width: 100%;">
+    <img src="./images/NUCLEO-U575ZI-Q.jpg" style="width: 28%; height: auto; margin-bottom: 20px;" />
+    <img src="./images/RT-Thread Titan Board.jpg" style="width: 28%; height: auto; margin-bottom: 20px;" />
+    <img src="./images/EK-RA8P1.jpg" style="width: 28%; height: auto; margin-bottom: 20px;" />
+    <img src="./images/GD32F427.png" style="width: 28%; height: auto; margin-bottom: 20px;" />
 </div>
 
 
@@ -39,7 +41,7 @@
 ## 与 SEGGER RTT 工具对比
 
 | 功能 | RTT Assistant | J-Link RTT Viewer | JLinkRTTClient | JLinkRTTLogger | J-Scope |
-|------|:---:|:---:|:---:|:---:|:---:|
+|------|:---|:---|:---|:---|:---|
 | **免费开源** | ✅ GPLv3 | ❌ 专有 | ❌ 专有 | ❌ 专有 | ❌ 专有 |
 | **J-Link 探针** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **DAP-Link / ST-Link** | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -58,6 +60,8 @@
 | **数据导出** | ✅ | ✅ | ❌ | ✅ 文件日志 | ✅ |
 | **配置文件保存** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **多探针支持** | ✅ J-Link/DAP/ST-Link | ❌ 仅J-Link | ❌ 仅J-Link | ❌ 仅J-Link | ❌ 仅J-Link |
+| **固件烧录** | ✅ J-Link/DAP/ST-Link | ❌ | ❌ | ❌ | ❌ |
+| **中英文切换** | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## 示波器模式使用说明
 ![](./resources/rtta.gif)
@@ -177,8 +181,8 @@ SEGGER_RTT_Write(1, buf, 5);
 ## 目录结构（打包后）
 
 ```
-RTT-Assistant v2.1.5/
-├── RTT-Assistant v2.1.5.exe   # 主程序
+RTT-Assistant v2.2.0/
+├── RTT-Assistant v2.2.0.exe   # 主程序
 ├── config/                     # 配置文件
 │   └── config.json
 ├── runtime/
@@ -188,6 +192,9 @@ RTT-Assistant v2.1.5/
 │   │   ├── JLink_x64.dll
 │   │   └── libusb-1.0.dll
 │   ├── packs/                  # CMSIS Pack文件
+│   ├── pyocd/                  # 独立PyOCD烧录工具（自包含）
+│   │   ├── pyocd.exe
+│   │   └── pyocd.yaml
 │   └── venv/                   # Python虚拟环境（PyOCD等依赖）
 ├── doc/                        # 文档
 ├── resources/                  # 资源文件

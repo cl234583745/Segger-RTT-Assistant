@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict
 
+from ..i18n import _ as i18n
+
 
 class DependencyType(Enum):
     PYTHON_PACKAGE = 'python_package'
@@ -42,13 +44,13 @@ _PACKED_IN_EXE = {'pylink', 'pefile', 'PyQt5', 'pyqtgraph', 'numpy'}
 JLINK_DEPENDENCIES = [
     DependencyItem(
         name='JLink_x64.dll', dep_type=DependencyType.DLL,
-        description='J-Link 驱动DLL (64位, 需从SEGGER官网下载)', backend=BackendType.JLINK,
+        description=i18n("dep.jlink_dll_x64"), backend=BackendType.JLINK,
         required=False, filename='JLink_x64.dll', size_mb=24.5,
         download_url='https://www.segger.com/downloads/jlink/',
     ),
     DependencyItem(
         name='JLinkARM.dll', dep_type=DependencyType.DLL,
-        description='J-Link 驱动DLL (32位)', backend=BackendType.JLINK,
+        description=i18n("dep.jlink_dll_x86"), backend=BackendType.JLINK,
         required=False, filename='JLinkARM.dll', size_mb=20.0,
         download_url='https://www.segger.com/downloads/jlink/',
     ),
@@ -57,23 +59,23 @@ JLINK_DEPENDENCIES = [
 PYOCD_CORE_DEPENDENCIES = [
     DependencyItem(
         name='pyocd', dep_type=DependencyType.PYTHON_PACKAGE,
-        description='PyOCD调试核心 (统一支持DAP-Link/ST-Link)', backend=None,
+        description=i18n("dep.pyocd_core"), backend=None,
         required=True, version_constraint='>=0.36.0',
         download_url='pip:pyocd>=0.36.0', size_mb=22.0,
     ),
     DependencyItem(
         name='usb1', dep_type=DependencyType.PYTHON_PACKAGE,
-        description='libusb1 Python绑定', backend=None,
+        description=i18n("dep.libusb1_binding"), backend=None,
         required=True, download_url='pip:libusb1', size_mb=0.5,
     ),
     DependencyItem(
         name='usb', dep_type=DependencyType.PYTHON_PACKAGE,
-        description='PyUSB USB设备枚举', backend=None,
+        description=i18n("dep.pyusb_enum"), backend=None,
         required=True, download_url='pip:pyusb', size_mb=0.4,
     ),
     DependencyItem(
         name='libusb-1.0.dll', dep_type=DependencyType.DLL,
-        description='USB驱动库', backend=None,
+        description=i18n("dep.libusb_dll"), backend=None,
         required=False, filename='libusb-1.0.dll', size_mb=0.1,
     ),
 ]
@@ -81,7 +83,7 @@ PYOCD_CORE_DEPENDENCIES = [
 DAPLINK_PLUGIN_DEPENDENCIES = [
     DependencyItem(
         name='Renesas.RA_DFP', dep_type=DependencyType.PACK,
-        description='瑞萨RA CMSIS Pack (示例)', backend=BackendType.DAPLINK,
+        description=i18n("dep.renesas_pack"), backend=BackendType.DAPLINK,
         required=False, filename='Renesas.RA_DFP.6.1.0.pack', size_mb=2.0,
         download_url='https://developer.arm.com/tools-and-software/open-source-software/developer-tools/cmsis-pack',
     ),
@@ -98,21 +100,21 @@ BACKEND_DEPENDENCIES: Dict[BackendType, List[DependencyItem]] = {
 BACKEND_INFO = {
     BackendType.JLINK: {
         'name': 'J-Link',
-        'description': 'SEGGER J-Link 调试器',
+        'description': i18n("backend.jlink_desc"),
         'icon': 'J',
         'vendors': 'SEGGER',
         'needs_pyocd_core': False,
     },
     BackendType.DAPLINK: {
         'name': 'DAP-Link',
-        'description': 'CMSIS-DAP探针 (DAP-Link/NXP LPC-Link/Picoprobe等)',
+        'description': i18n("backend.daplink_desc"),
         'icon': 'D',
         'vendors': 'ARM/兼容',
         'needs_pyocd_core': True,
     },
     BackendType.STLINK: {
         'name': 'ST-Link',
-        'description': 'STMicroelectronics ST-Link (v2/v2-1/v3)',
+        'description': i18n("backend.stlink_desc"),
         'icon': 'S',
         'vendors': 'ST',
         'needs_pyocd_core': True,

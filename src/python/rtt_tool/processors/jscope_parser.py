@@ -60,18 +60,67 @@ def parse_jscope_format(format_str: str) -> list:
     return fields
 
 
-def parse_channel_name(channel_name: str) -> list:
+def parse_channel_name(channel_name: str) -> dict:
     """
-    解析RTT通道名，返回JScope格式字段列表。
-    如果通道名以 'JScope_' 开头，解析其格式；
-    否则返回空列表（自动识别模式）。
+    解析RTT通道名，返回JScope格式信息字典。
+    
+    Returns:
+        dict with keys:
+            fields: 字段定义列表
+            packet_size: 包大小(字节)
+            data_field_count: 非时间戳数据字段数量
+            buffer_mode: "合并buffer" 或 "独立通道"
+            has_timestamp: 是否含硬件时间戳
+            sub_channel_names: 子通道显示名列表(仅数据字段)
+        空dict表示非JScope格式或解析失败
     """
     if not channel_name:
+        return {}
+    if not channel_name.startswith(JSOCOPE_PREFIX):
+        return {}
+    
+    format_str = channel_name[len(JSOCOPE_PREFIX):]
+    fields = parse_jscope_format(format_str)
+    if not fields:
+        return {}
+    
+    packet_size = sum(f['size'] for f in fields)
+    data_fields = [f for f in fields if not f.get('is_timestamp')]
+    data_field_count = len(data_fields)
+    has_timestamp = any(f.get('is_timestamp') for f in fields)
+    buffer_mode = "合并buffer" if data_field_count > 1 else "独立通道"
+    sub_channel_names = generate_sub_channel_names(fields)
+    
+    if data_field_count > 16:
+        logger.warning(f"JScope格式 '{channel_name}' 包含{data_field_count}个数据字段，较多可能影响性能")
+    
+    return {
+        'fields': fields,
+        'packet_size': packet_size,
+        'data_field_count': data_field_count,
+        'buffer_mode': buffer_mode,
+        'has_timestamp': has_timestamp,
+        'sub_channel_names': sub_channel_names,
+    }
+
+
+def generate_sub_channel_names(fields: list) -> list:
+    """
+    生成子通道显示名列表（不含母通道前缀）。
+    
+    格式: ["[1]", "[2]"] - 1-based序号
+    时间戳字段(t4)不生成子通道名
+    调用方负责拼接母通道前缀，如 "CH1" + "[1]" = "CH1[1]"
+    """
+    data_fields = [f for f in fields if not f.get('is_timestamp')]
+    if not data_fields:
         return []
-    if channel_name.startswith(JSOCOPE_PREFIX):
-        format_str = channel_name[len(JSOCOPE_PREFIX):]
-        return parse_jscope_format(format_str)
-    return []
+    
+    names = []
+    for i in range(len(data_fields)):
+        names.append(f"[{i + 1}]")
+    
+    return names
 
 
 def calc_packet_size(fields: list) -> int:

@@ -91,16 +91,19 @@ def build():
 
     print(f"输出目录: {dist_dir}")
 
-    # Copy config/ (only pyocd.yaml, rest auto-generated)
+    # Copy config/ (i18n only, pyocd.yaml now in runtime/pyocd/)
     config_src = os.path.join(ROOT_DIR, 'config')
     config_dst = os.path.join(dist_dir, 'config')
     if os.path.isdir(config_src):
         os.makedirs(config_dst, exist_ok=True)
-        for f in ['pyocd.yaml']:
-            src = os.path.join(config_src, f)
-            if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(config_dst, f))
-                print(f"  已复制 config/{f}")
+        # Copy i18n translation files
+        i18n_src = os.path.join(config_src, 'i18n')
+        i18n_dst = os.path.join(config_dst, 'i18n')
+        if os.path.isdir(i18n_src):
+            if os.path.isdir(i18n_dst):
+                shutil.rmtree(i18n_dst)
+            shutil.copytree(i18n_src, i18n_dst)
+            print(f"  已复制 config/i18n/")
         print(f"  已复制 config/ (仅 {', '.join(os.listdir(config_dst))})")
 
     # Copy doc/ (convert .md to .html, copy .pdf and images/)
@@ -111,7 +114,7 @@ def build():
             shutil.rmtree(doc_dst)
         os.makedirs(doc_dst, exist_ok=True)
         from markdown import markdown
-        _CSS = "<meta charset='utf-8'><style>body{font-family:'Microsoft YaHei',sans-serif;max-width:900px;margin:0 auto;padding:20px;line-height:1.8}pre{background:#f5f5f5;padding:10px;border-radius:4px;overflow-x:auto}code{background:#f0f0f0;padding:2px 4px;border-radius:2px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6px 10px;text-align:left}th{background:#eee}</style>"
+        _CSS = "<meta charset='utf-8'><style>body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;max-width:900px;margin:0 auto;padding:20px;line-height:1.8}pre{background:#f5f5f5;padding:10px;border-radius:4px;overflow-x:auto}code{background:#f0f0f0;padding:2px 4px;border-radius:2px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6px 10px;text-align:left}th{background:#eee}</style>"
         for item in os.listdir(doc_src):
             src_item = os.path.join(doc_src, item)
             name, ext = os.path.splitext(item)
@@ -149,12 +152,37 @@ def build():
                 print(f"  已复制 resources/{f}")
         print(f"  已复制 resources/ ({', '.join(os.listdir(res_dst))})")
 
-    # Copy runtime/ structure (dll, packs, venv)
+    # Copy runtime/ structure (dll, packs, pyocd, venv)
     runtime_src = os.path.join(ROOT_DIR, 'runtime')
     runtime_dst = os.path.join(dist_dir, 'runtime')
     for sub in ['dll', 'packs']:
         os.makedirs(os.path.join(runtime_dst, sub), exist_ok=True)
     print(f"  已创建 runtime/dll/ runtime/packs/")
+
+    # Copy standalone pyocd.exe
+    pyocd_src = os.path.join(runtime_src, 'pyocd', 'pyocd.exe')
+    if os.path.isfile(pyocd_src):
+        pyocd_dst_dir = os.path.join(runtime_dst, 'pyocd')
+        os.makedirs(pyocd_dst_dir, exist_ok=True)
+        shutil.copy2(pyocd_src, os.path.join(pyocd_dst_dir, 'pyocd.exe'))
+        size_mb = os.path.getsize(pyocd_src) / 1024 / 1024
+        print(f"  已复制 runtime/pyocd/pyocd.exe ({size_mb:.1f}MB)")
+    else:
+        print(f"  注意: runtime/pyocd/pyocd.exe 不存在，请先运行 build_pyocd.py")
+
+    # Generate pyocd.yaml in dist based on dist's packs
+    pyocd_dst_dir = os.path.join(runtime_dst, 'pyocd')
+    os.makedirs(pyocd_dst_dir, exist_ok=True)
+    packs_dst_dir = os.path.join(runtime_dst, 'packs')
+    pack_files = sorted(glob.glob(os.path.join(packs_dst_dir, '*.pack'))) if os.path.isdir(packs_dst_dir) else []
+    yaml_lines = ['pack:']
+    for pf in pack_files:
+        rel = os.path.relpath(pf, pyocd_dst_dir).replace('\\', '/')
+        yaml_lines.append(f'  - {rel}')
+    yaml_content = '\n'.join(yaml_lines) + '\n'
+    with open(os.path.join(pyocd_dst_dir, 'pyocd.yaml'), 'w', encoding='utf-8') as f:
+        f.write(yaml_content)
+    print(f"  已生成 runtime/pyocd/pyocd.yaml ({len(pack_files)} 个Pack)")
 
     venv_src = os.path.join(runtime_src, 'venv')
     venv_dst = os.path.join(runtime_dst, 'venv')

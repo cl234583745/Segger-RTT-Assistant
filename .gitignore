@@ -17,6 +17,7 @@ runtime/venv/
 runtime/dll/*.dll
 runtime/packs/*.pack
 runtime/cpm_cache/
+runtime/pyocd/pyocd.exe
 !runtime/dll/.gitkeep
 !runtime/packs/.gitkeep
 

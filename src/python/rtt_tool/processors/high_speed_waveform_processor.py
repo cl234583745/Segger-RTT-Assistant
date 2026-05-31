@@ -4,7 +4,9 @@ import logging
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from .jscope_parser import parse_packet
+from .sub_channel_splitter import SubChannelSplitter
 from .waveform_processor import DataFormat, FORMAT_DETAIL_MAP
+from ..models.sub_channel_id import SubChannelId
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class HighSpeedWaveformProcessor(QObject):
     }
 
     waveform_updated = pyqtSignal(int, list, list)
+    waveform_updated_sub = pyqtSignal(object, list, list)
     frequency_updated = pyqtSignal(int, float)
 
     def __init__(self, parent=None, buffer_size=1000000):
@@ -47,12 +50,21 @@ class HighSpeedWaveformProcessor(QObject):
         self._jscope_packet_size = 0
         self._data_format = DataFormat.AUTO
         self._channel_jscope_fields = {}
+        self._channel_jscope_names = {}
         self._channel_data_format = {}
+        self._channel_data_field_counts = {}
         self._residual_buffers = {}
         self._sampling_interval = 0
         self._hw_ts_origins = {}
 
         self._supports_hw_timestamps = False
+        self._splitter = SubChannelSplitter()
+
+        self._sub_ts_buffers = {}
+        self._sub_val_buffers = {}
+        self._sub_write_pos = {}
+        self._sub_wrap_count = {}
+        self._sub_total_count = {}
 
         self._decimate_timer = QTimer(self)
         self._decimate_timer.setInterval(33)
@@ -66,9 +78,24 @@ class HighSpeedWaveformProcessor(QObject):
         self._total_count[channel] = 0
         self._residual_buffers[channel] = b''
 
+    def _init_sub_channel(self, sub_ch_id: SubChannelId):
+        key = sub_ch_id.to_signal_key()
+        self._sub_ts_buffers[key] = [0.0] * self._buffer_size
+        self._sub_val_buffers[key] = [0.0] * self._buffer_size
+        self._sub_write_pos[key] = 0
+        self._sub_wrap_count[key] = 0
+        self._sub_total_count[key] = 0
+
     def process_data(self, channel: int, data: bytes) -> None:
         if channel not in self._ts_buffers:
             self._init_channel(channel)
+
+        ch_fields = self._channel_jscope_fields.get(channel)
+        data_field_count = self._channel_data_field_counts.get(channel, 1)
+
+        if ch_fields and data_field_count > 1:
+            self._process_data_sub_channels(channel, data, ch_fields)
+            return
 
         values, hw_timestamps = self._parse_channel(channel, data)
         if not values:
@@ -98,6 +125,53 @@ class HighSpeedWaveformProcessor(QObject):
 
         self._write_pos[channel] = wp
         self._total_count[channel] += len(values)
+
+    def _process_data_sub_channels(self, channel: int, data: bytes, fields: list):
+        ch_name = self._channel_jscope_names.get(channel, "")
+        residual = self._residual_buffers.get(channel, b'')
+        sub_channel_data, new_residual, hw_ts_per_pkt = self._splitter.parse_and_split(
+            channel, data, fields, residual, ch_name)
+        self._residual_buffers[channel] = new_residual
+
+        if not sub_channel_data:
+            return
+
+        use_hw = any(t is not None for t in hw_ts_per_pkt)
+        est_dt = 0.001 if self._sampling_interval <= 0 else self._sampling_interval
+
+        if use_hw:
+            if channel not in self._hw_ts_origins:
+                first_ts = next((t for t in hw_ts_per_pkt if t is not None), None)
+                if first_ts is not None:
+                    self._hw_ts_origins[channel] = first_ts * 1e-6
+
+        for sub_ch_id, ch_data in sub_channel_data.items():
+            key = sub_ch_id.to_signal_key()
+            if key not in self._sub_ts_buffers:
+                self._init_sub_channel(sub_ch_id)
+
+            values = ch_data['values']
+            pkt_timestamps = ch_data['timestamps']
+
+            ts_buf = self._sub_ts_buffers[key]
+            val_buf = self._sub_val_buffers[key]
+            wp = self._sub_write_pos[key]
+            idx_start = self._sub_total_count[key]
+
+            for i, v in enumerate(values):
+                if use_hw and channel in self._hw_ts_origins and pkt_timestamps[i] is not None:
+                    ts = pkt_timestamps[i] * 1e-6 - self._hw_ts_origins[channel]
+                else:
+                    ts = (idx_start + i) * est_dt
+
+                val_buf[wp] = float(v)
+                ts_buf[wp] = ts
+                wp = (wp + 1) % self._buffer_size
+                if wp == 0:
+                    self._sub_wrap_count[key] += 1
+
+            self._sub_write_pos[key] = wp
+            self._sub_total_count[key] += len(values)
 
     def _parse(self, data: bytes) -> tuple:
         if self._jscope_fields is not None:
@@ -160,9 +234,11 @@ class HighSpeedWaveformProcessor(QObject):
 
     def set_channel_jscope_format(self, channel: int, channel_name: str) -> None:
         from .jscope_parser import parse_channel_name
-        fields = parse_channel_name(channel_name)
-        if fields:
-            self._channel_jscope_fields[channel] = fields
+        parse_result = parse_channel_name(channel_name)
+        if parse_result:
+            self._channel_jscope_fields[channel] = parse_result['fields']
+            self._channel_jscope_names[channel] = channel_name
+            self._channel_data_field_counts[channel] = parse_result['data_field_count']
             self._residual_buffers.pop(channel, None)
 
     def _parse_auto(self, data: bytes) -> tuple:
@@ -235,6 +311,19 @@ class HighSpeedWaveformProcessor(QObject):
             if freq is not None and freq > 0:
                 self.frequency_updated.emit(ch, freq)
 
+        for key in list(self._sub_ts_buffers.keys()):
+            timestamps, values = self._read_sub_ring_buffer(key)
+            if len(timestamps) < 2:
+                continue
+
+            if len(timestamps) > self._max_display_points:
+                timestamps, values = self._decimate_peak(timestamps, values)
+
+            sub_ch_id = SubChannelId(
+                rtt_channel=key[0], field_index=key[1],
+                field_label="", rtt_channel_name="")
+            self.waveform_updated_sub.emit(sub_ch_id, timestamps, values)
+
     def _calculate_frequency(self, timestamps, values):
         if len(values) < 10:
             return None
@@ -274,6 +363,24 @@ class HighSpeedWaveformProcessor(QObject):
 
         return (timestamps, values)
 
+    def _read_sub_ring_buffer(self, key):
+        wp = self._sub_write_pos[key]
+        wrapped = self._sub_wrap_count[key]
+        total = self._sub_total_count[key]
+        buf_size = self._buffer_size
+
+        if total == 0:
+            return ([], [])
+
+        if wrapped == 0:
+            timestamps = self._sub_ts_buffers[key][:wp]
+            values = self._sub_val_buffers[key][:wp]
+        else:
+            timestamps = self._sub_ts_buffers[key][wp:] + self._sub_ts_buffers[key][:wp]
+            values = self._sub_val_buffers[key][wp:] + self._sub_val_buffers[key][:wp]
+
+        return (timestamps, values)
+
     def _decimate_peak(self, timestamps, values):
         n = len(timestamps)
         target = self._max_display_points
@@ -300,16 +407,34 @@ class HighSpeedWaveformProcessor(QObject):
         return (result_ts, result_val)
 
     def set_jscope_format(self, channel_name: str) -> bool:
-        from .jscope_parser import parse_channel_name, calc_packet_size
-        fields = parse_channel_name(channel_name)
-        if not fields:
+        from .jscope_parser import parse_channel_name
+        parse_result = parse_channel_name(channel_name)
+        if not parse_result:
             self._jscope_fields = None
             self._jscope_packet_size = 0
             return False
-        self._jscope_fields = fields
-        self._jscope_packet_size = calc_packet_size(fields)
-        self._supports_hw_timestamps = any(f.get('is_timestamp') for f in fields)
+        self._jscope_fields = parse_result['fields']
+        self._jscope_packet_size = parse_result['packet_size']
+        self._supports_hw_timestamps = parse_result.get('has_timestamp', False)
         return True
+
+    def get_data_field_count(self, channel: int) -> int:
+        return self._channel_data_field_counts.get(channel, 1)
+
+    def get_sub_channel_ids(self, channel: int) -> list:
+        result = []
+        count = self._channel_data_field_counts.get(channel, 0)
+        ch_name = self._channel_jscope_names.get(channel, "")
+        fields = self._channel_jscope_fields.get(channel, [])
+        data_fields = [f for f in fields if not f.get('is_timestamp')]
+        for fi in range(min(count, len(data_fields))):
+            result.append(SubChannelId(
+                rtt_channel=channel,
+                field_index=fi,
+                field_label=data_fields[fi]['label'],
+                rtt_channel_name=ch_name
+            ))
+        return result
 
     def set_data_format(self, fmt: DataFormat) -> None:
         self._data_format = fmt
@@ -331,3 +456,8 @@ class HighSpeedWaveformProcessor(QObject):
             self._init_channel(ch)
         self._hw_ts_origins = {}
         self._residual_buffers.clear()
+        self._sub_ts_buffers.clear()
+        self._sub_val_buffers.clear()
+        self._sub_write_pos.clear()
+        self._sub_wrap_count.clear()
+        self._sub_total_count.clear()

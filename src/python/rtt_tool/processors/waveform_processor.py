@@ -7,6 +7,8 @@ from PyQt5.QtCore import pyqtSignal
 
 from .base import DataProcessor
 from .jscope_parser import parse_channel_name, parse_packet, calc_packet_size, format_display_text, AUTO_TYPE_MAP
+from .sub_channel_splitter import SubChannelSplitter
+from ..models.sub_channel_id import SubChannelId
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ class WaveformProcessor(DataProcessor):
     """二进制波形数据处理器，解析 <type_byte><value_bytes> 格式。"""
 
     waveform_updated = pyqtSignal(int, list)
+    waveform_updated_sub = pyqtSignal(object, list, list)
 
     TYPE_MAP = {
         0x01: ('b', 1),
@@ -79,6 +82,7 @@ class WaveformProcessor(DataProcessor):
         self._hw_ts_origins = {}
         self._channel_jscope_fields = {}
         self._channel_jscope_packet_size = {}
+        self._channel_jscope_names = {}
         self._channel_data_format = {}
         self._residual_buffers = {}
         self._data_format = DataFormat.AUTO
@@ -89,6 +93,11 @@ class WaveformProcessor(DataProcessor):
         self._data_log_handle = data_log_handle
         self._channel_log_handles = {}
         self._log_state = {}
+        self._splitter = SubChannelSplitter()
+        self._sub_channel_buffers = {}
+        self._sub_channel_timestamps = {}
+        self._sub_channel_sample_counters = {}
+        self._channel_data_field_counts = {}
         for ch in self._channels:
             self._init_channel(ch)
 
@@ -98,6 +107,42 @@ class WaveformProcessor(DataProcessor):
         self._channel_sample_counters[channel] = 0
         self._residual_buffers[channel] = b''
 
+    def _init_sub_channel(self, sub_ch_id: SubChannelId):
+        key = sub_ch_id.to_signal_key()
+        self._sub_channel_buffers[key] = deque(maxlen=self._buffer_size)
+        self._sub_channel_timestamps[key] = deque(maxlen=self._buffer_size)
+        self._sub_channel_sample_counters[key] = 0
+
+    def _write_log(self, channel: int, data: bytes):
+        log_handle = self._channel_log_handles.get(channel) or self._data_log_handle
+        if log_handle is None:
+            return
+        try:
+            from datetime import datetime
+            now_time = datetime.now()
+            if channel not in self._log_state:
+                self._log_state[channel] = {
+                    'start_time': now_time,
+                    'last_time': now_time,
+                    'count': 0
+                }
+                timestamp = now_time.strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
+                log_handle.write(f"\n{timestamp} [CH{channel}] [开始接收]\n")
+            time_diff = (now_time - self._log_state[channel]['last_time']).total_seconds()
+            if time_diff > 0.1 and self._log_state[channel]['count'] > 0:
+                last_ts = self._log_state[channel]['last_time'].strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
+                log_handle.write(f"{last_ts} [CH{channel}] [结束] 共{self._log_state[channel]['count']}字节\n")
+                timestamp = now_time.strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
+                log_handle.write(f"\n{timestamp} [CH{channel}] [继续接收]\n")
+                self._log_state[channel]['count'] = 0
+            hex_str = ' '.join(f'{b:02X}' for b in data)
+            log_handle.write(f"{hex_str}\n")
+            log_handle.flush()
+            self._log_state[channel]['last_time'] = now_time
+            self._log_state[channel]['count'] += len(data)
+        except Exception:
+            pass
+
     def process(self, channel: int, data: bytes) -> None:
         if channel not in self._channels:
             self.add_channel(channel)
@@ -105,52 +150,77 @@ class WaveformProcessor(DataProcessor):
         if channel not in self._channel_buffers:
             self._init_channel(channel)
 
-        log_handle = self._channel_log_handles.get(channel) or self._data_log_handle
-        if log_handle is not None:
-            try:
-                from datetime import datetime
-                now_time = datetime.now()
-                
-                # 检查是否需要写开始/结束标记
-                if channel not in self._log_state:
-                    # 首次接收，写开始标记
-                    self._log_state[channel] = {
-                        'start_time': now_time,
-                        'last_time': now_time,
-                        'count': 0
-                    }
-                    timestamp = now_time.strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
-                    log_handle.write(f"\n{timestamp} [CH{channel}] [开始接收]\n")
-                
-                # 检查是否超过100ms未接收，写结束/开始标记
-                time_diff = (now_time - self._log_state[channel]['last_time']).total_seconds()
-                if time_diff > 0.1 and self._log_state[channel]['count'] > 0:
-                    last_ts = self._log_state[channel]['last_time'].strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
-                    log_handle.write(f"{last_ts} [CH{channel}] [结束] 共{self._log_state[channel]['count']}字节\n")
-                    timestamp = now_time.strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
-                    log_handle.write(f"\n{timestamp} [CH{channel}] [继续接收]\n")
-                    self._log_state[channel]['count'] = 0
-                
-                # 写数据（只写十六进制）
-                hex_str = ' '.join(f'{b:02X}' for b in data)
-                log_handle.write(f"{hex_str}\n")
-                log_handle.flush()
-                
-                # 更新状态
-                self._log_state[channel]['last_time'] = now_time
-                self._log_state[channel]['count'] += len(data)
-            except Exception:
-                pass
+        self._write_log(channel, data)
+
+        ch_fields = self._channel_jscope_fields.get(channel)
+        if ch_fields:
+            self._process_jscope_channel(channel, data, ch_fields)
+            return
 
         values, hw_timestamps = self._parse_channel(channel, data)
         
         if not values:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 f"CH{channel} parse EMPTY! jscope={self._channel_jscope_fields.get(channel)}, "
                 f"fmt={self._data_format}, raw_hex={data[:8].hex() if len(data)>=8 else data.hex()}")
             return
         
+        self._store_and_emit_legacy(channel, values, hw_timestamps)
+
+    def _process_jscope_channel(self, channel: int, data: bytes, fields: list):
+        ch_name = self._channel_jscope_names.get(channel, "")
+        data_field_count = self._channel_data_field_counts.get(channel, 1)
+
+        residual = self._residual_buffers.get(channel, b'')
+        sub_channel_data, new_residual, hw_ts_per_pkt = self._splitter.parse_and_split(
+            channel, data, fields, residual, ch_name)
+        self._residual_buffers[channel] = new_residual
+
+        if not sub_channel_data:
+            return
+
+        est_dt = 0.001 if self._sampling_interval <= 0 else self._sampling_interval
+        use_hw_ts = any(t is not None for t in hw_ts_per_pkt)
+
+        if use_hw_ts:
+            if channel not in self._hw_ts_origins:
+                first_ts = next((t for t in hw_ts_per_pkt if t is not None), None)
+                if first_ts is not None:
+                    self._hw_ts_origins[channel] = first_ts * 1e-6
+
+        for sub_ch_id, ch_data in sub_channel_data.items():
+            key = sub_ch_id.to_signal_key()
+            if key not in self._sub_channel_buffers:
+                self._init_sub_channel(sub_ch_id)
+
+            values = ch_data['values']
+            pkt_timestamps = ch_data['timestamps']
+            computed_ts = []
+
+            if use_hw_ts and channel in self._hw_ts_origins:
+                origin = self._hw_ts_origins[channel]
+                for pkt_ts in pkt_timestamps:
+                    if pkt_ts is not None:
+                        computed_ts.append(pkt_ts * 1e-6 - origin)
+                    else:
+                        computed_ts.append(0.0)
+            else:
+                idx_start = self._sub_channel_sample_counters.get(key, 0)
+                for i in range(len(values)):
+                    computed_ts.append((idx_start + i) * est_dt)
+                self._sub_channel_sample_counters[key] = idx_start + len(values)
+
+            for v, ts in zip(values, computed_ts):
+                self._sub_channel_buffers[key].append(v)
+                self._sub_channel_timestamps[key].append(ts)
+
+            if data_field_count > 1:
+                self.waveform_updated_sub.emit(sub_ch_id, computed_ts, values)
+            else:
+                self.waveform_updated.emit(channel, values)
+                self.data_updated.emit((channel, values))
+
+    def _store_and_emit_legacy(self, channel: int, values: list, hw_timestamps: list):
         use_hw_ts = len(hw_timestamps) == len(values) and any(t is not None for t in hw_timestamps)
 
         if channel not in self._channel_sample_counters:
@@ -195,59 +265,18 @@ class WaveformProcessor(DataProcessor):
             if channel not in self._channel_buffers:
                 self._init_channel(channel)
 
-            log_handle = self._channel_log_handles.get(channel) or self._data_log_handle
-            if log_handle is not None:
-                try:
-                    from datetime import datetime
-                    now_time = datetime.now()
-                    if channel not in self._log_state:
-                        self._log_state[channel] = {
-                            'start_time': now_time,
-                            'last_time': now_time,
-                            'count': 0
-                        }
-                        timestamp = now_time.strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
-                        log_handle.write(f"\n{timestamp} [CH{channel}] [开始接收]\n")
-                    time_diff = (now_time - self._log_state[channel]['last_time']).total_seconds()
-                    if time_diff > 0.1 and self._log_state[channel]['count'] > 0:
-                        last_ts = self._log_state[channel]['last_time'].strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
-                        log_handle.write(f"{last_ts} [CH{channel}] [结束] 共{self._log_state[channel]['count']}字节\n")
-                        timestamp = now_time.strftime("[%Y-%m-%d %H:%M:%S.%f")[:-3] + "]"
-                        log_handle.write(f"\n{timestamp} [CH{channel}] [继续接收]\n")
-                        self._log_state[channel]['count'] = 0
-                    hex_str = ' '.join(f'{b:02X}' for b in data)
-                    log_handle.write(f"{hex_str}\n")
-                    log_handle.flush()
-                    self._log_state[channel]['last_time'] = now_time
-                    self._log_state[channel]['count'] += len(data)
-                except Exception:
-                    pass
+            self._write_log(channel, data)
+
+            ch_fields = self._channel_jscope_fields.get(channel)
+            if ch_fields:
+                self._process_jscope_channel(channel, data, ch_fields)
+                continue
 
             values, hw_timestamps = self._parse_channel(channel, data)
             if not values:
                 continue
 
-            if channel not in self._channel_sample_counters:
-                self._channel_sample_counters[channel] = 0
-
-            use_hw_ts = len(hw_timestamps) == len(values) and any(t is not None for t in hw_timestamps)
-
-            if use_hw_ts:
-                if channel not in self._hw_ts_origins:
-                    self._hw_ts_origins[channel] = hw_timestamps[0] * 1e-6
-                for i, v in enumerate(values):
-                    self._channel_buffers[channel].append(v)
-                    ts = hw_timestamps[i] * 1e-6 - self._hw_ts_origins[channel] if hw_timestamps[i] is not None else 0.0
-                    self._channel_timestamps[channel].append(ts)
-            else:
-                idx_start = self._channel_sample_counters[channel]
-                for i, v in enumerate(values):
-                    self._channel_buffers[channel].append(v)
-                    self._channel_timestamps[channel].append((idx_start + i) * est_dt)
-                self._channel_sample_counters[channel] += len(values)
-
-            self.waveform_updated.emit(channel, values)
-            self.data_updated.emit((channel, values))
+            self._store_and_emit_legacy(channel, values, hw_timestamps)
 
         elapsed = (time.perf_counter() - t0) * 1000
         if not hasattr(self, '_batch_log_counter'):
@@ -255,8 +284,7 @@ class WaveformProcessor(DataProcessor):
         self._batch_log_counter += 1
         if self._batch_log_counter <= 5 or self._batch_log_counter % 100 == 0:
             ch_summary = ', '.join(f'CH{ch}:len={len(self._channel_buffers.get(ch, []))}' for ch, _ in batch)
-            import logging
-            logging.getLogger(__name__).info(
+            logger.info(
                 f"[batch] #{self._batch_log_counter} poll_offset={poll_offset:.4f}s "
                 f"est_dt={est_dt*1000:.2f}ms elapsed={elapsed:.1f}ms {ch_summary}")
 
@@ -342,10 +370,13 @@ class WaveformProcessor(DataProcessor):
         return (values, [])
 
     def set_channel_jscope_format(self, channel: int, channel_name: str) -> None:
-        fields = parse_channel_name(channel_name)
-        if fields:
+        parse_result = parse_channel_name(channel_name)
+        if parse_result:
+            fields = parse_result['fields']
             self._channel_jscope_fields[channel] = fields
-            self._channel_jscope_packet_size[channel] = calc_packet_size(fields)
+            self._channel_jscope_packet_size[channel] = parse_result['packet_size']
+            self._channel_jscope_names[channel] = channel_name
+            self._channel_data_field_counts[channel] = parse_result['data_field_count']
             self._channel_data_format[channel] = DataFormat.AUTO
             self._residual_buffers.pop(channel, None)
 
@@ -410,15 +441,15 @@ class WaveformProcessor(DataProcessor):
 
     def set_jscope_format(self, channel_name: str) -> bool:
         """根据RTT通道名设置JScope格式。返回是否成功解析为JScope格式。"""
-        fields = parse_channel_name(channel_name)
-        if not fields:
+        parse_result = parse_channel_name(channel_name)
+        if not parse_result:
             self._jscope_fields = None
             self._jscope_packet_size = 0
             self._jscope_format_text = "自动识别"
             return False
-        self._jscope_fields = fields
-        self._jscope_packet_size = calc_packet_size(fields)
-        self._jscope_format_text = format_display_text(fields)
+        self._jscope_fields = parse_result['fields']
+        self._jscope_packet_size = parse_result['packet_size']
+        self._jscope_format_text = format_display_text(parse_result['fields'])
         logger.info(f"示波器: JScope格式 '{channel_name}' -> {self._jscope_format_text}, 包大小={self._jscope_packet_size}字节")
         return True
 
@@ -449,7 +480,15 @@ class WaveformProcessor(DataProcessor):
     def get_supported_channels(self) -> list:
         return list(self._channels)
 
-    def get_buffer_data(self, channel: int):
+    def get_buffer_data(self, channel):
+        if isinstance(channel, SubChannelId):
+            key = channel.to_signal_key()
+            if key not in self._sub_channel_buffers:
+                return ([], [])
+            ts_list = list(self._sub_channel_timestamps[key])
+            val_list = list(self._sub_channel_buffers[key])
+            n = min(len(ts_list), len(val_list))
+            return (ts_list[:n], val_list[:n])
         if channel not in self._channel_buffers:
             return ([], [])
         ts_list = list(self._channel_timestamps[channel])
@@ -459,6 +498,24 @@ class WaveformProcessor(DataProcessor):
             ts_list = ts_list[:n]
             val_list = val_list[:n]
         return (ts_list, val_list)
+
+    def get_data_field_count(self, channel: int) -> int:
+        return self._channel_data_field_counts.get(channel, 1)
+
+    def get_sub_channel_ids(self, channel: int) -> list:
+        result = []
+        count = self._channel_data_field_counts.get(channel, 0)
+        ch_name = self._channel_jscope_names.get(channel, "")
+        fields = self._channel_jscope_fields.get(channel, [])
+        data_fields = [f for f in fields if not f.get('is_timestamp')]
+        for fi in range(min(count, len(data_fields))):
+            result.append(SubChannelId(
+                rtt_channel=channel,
+                field_index=fi,
+                field_label=data_fields[fi]['label'],
+                rtt_channel_name=ch_name
+            ))
+        return result
 
     def add_channel(self, channel: int):
         if channel not in self._channels:
@@ -471,6 +528,11 @@ class WaveformProcessor(DataProcessor):
         self._channel_buffers.pop(channel, None)
         self._channel_timestamps.pop(channel, None)
         self._residual_buffers.pop(channel, None)
+        keys_to_remove = [k for k in self._sub_channel_buffers if k[0] == channel]
+        for k in keys_to_remove:
+            self._sub_channel_buffers.pop(k, None)
+            self._sub_channel_timestamps.pop(k, None)
+            self._sub_channel_sample_counters.pop(k, None)
 
     def reset(self) -> None:
         for ch in self._channels:
@@ -480,7 +542,9 @@ class WaveformProcessor(DataProcessor):
         self._time_origin = None
         self._hw_ts_origins = {}
         self._residual_buffers.clear()
-        # 写结束标记并清除日志状态
+        self._sub_channel_buffers.clear()
+        self._sub_channel_timestamps.clear()
+        self._sub_channel_sample_counters.clear()
         if self._data_log_handle is not None:
             try:
                 from datetime import datetime

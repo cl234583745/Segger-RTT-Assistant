@@ -1,3 +1,4 @@
+**[English](SEGGER_RTT Porting Guide.md) | 简体中文**
 # SEGGER RTT 移植指南
 
 本文档面向 MCU 端开发者，介绍如何移植 SEGGER RTT 并与 RTT Assistant 配合使用。RTT Assistant 支持两种工作模式，MCU 端通过不同的通道来区分：

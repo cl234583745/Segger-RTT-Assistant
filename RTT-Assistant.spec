@@ -9,8 +9,9 @@ a = Analysis(
     ['src/scripts/main.py'],
     pathex=['src/python'],
     binaries=[],
-    datas=[],
+    datas=[('config/i18n', 'config/i18n')],
     hiddenimports=[
+        'rtt_tool.i18n', 'rtt_tool.i18n.translations', 'rtt_tool.i18n.loader',
         'rtt_tool.backend', 'rtt_tool.backend.base', 'rtt_tool.backend.jlink_backend',
         'rtt_tool.backend.pyocd_backend', 'rtt_tool.backend.manager',
         'rtt_tool.processors', 'rtt_tool.processors.base', 'rtt_tool.processors.log_processor',

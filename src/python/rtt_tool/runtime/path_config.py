@@ -28,7 +28,9 @@ RUNTIME_LIBUSB_DLL_PATH = os.path.join(RUNTIME_DLL_DIR, 'libusb-1.0.dll')
 
 RUNTIME_CONFIG_DIR = os.path.join(get_app_root(), 'config')
 RUNTIME_CONFIG_JSON = os.path.join(RUNTIME_CONFIG_DIR, 'config.json')
-RUNTIME_PYOCD_YAML = os.path.join(RUNTIME_CONFIG_DIR, 'pyocd.yaml')
+RUNTIME_PYOCD_DIR = os.path.join(RUNTIME_DIR, 'pyocd')
+
+RUNTIME_PYOCD_YAML = os.path.join(RUNTIME_PYOCD_DIR, 'pyocd.yaml')
 RUNTIME_DEVICES_TXT = os.path.join(RUNTIME_CONFIG_DIR, 'devices.txt')
 RUNTIME_PYOCD_TARGETS_TXT = os.path.join(RUNTIME_CONFIG_DIR, 'pyocd_targets.txt')
 RUNTIME_LOG_DIR = os.path.join(get_app_root(), 'log')
@@ -39,7 +41,7 @@ RUNTIME_ICON_PNG = os.path.join(RUNTIME_RESOURCES_DIR, 'icon.png')
 
 
 def ensure_runtime_dirs():
-    for d in [RUNTIME_DIR, RUNTIME_DLL_DIR, RUNTIME_PACKS_DIR, RUNTIME_LOG_DIR]:
+    for d in [RUNTIME_DIR, RUNTIME_DLL_DIR, RUNTIME_PACKS_DIR, RUNTIME_PYOCD_DIR, RUNTIME_LOG_DIR]:
         os.makedirs(d, exist_ok=True)
 
 

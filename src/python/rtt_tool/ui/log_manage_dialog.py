@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QHeaderView, QMessageBox)
 from PyQt5.QtCore import Qt
 
+from ..i18n import _ as i18n, language_changed as i18n_language_changed
+
 
 class LogManageDialog(QDialog):
     def __init__(self, diag_log_registry, parent=None):
@@ -13,13 +15,13 @@ class LogManageDialog(QDialog):
         self._init_ui()
 
     def _init_ui(self):
-        self.setWindowTitle('诊断日志管理')
+        self.setWindowTitle(i18n("dialog.diag_log_manage"))
         self.setFixedSize(520, 280)
 
         layout = QVBoxLayout(self)
 
         self._table = QTableWidget(0, 4, self)
-        self._table.setHorizontalHeaderLabels(['日志名称', '文件大小', '当前级别', '清空'])
+        self._table.setHorizontalHeaderLabels([i18n("header.log_name"), i18n("header.file_size"), i18n("header.current_level"), i18n("header.clear")])
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -28,17 +30,29 @@ class LogManageDialog(QDialog):
         layout.addWidget(self._table)
 
         btn_layout = QHBoxLayout()
-        self._refresh_btn = QPushButton('刷新')
+        self._refresh_btn = QPushButton(i18n("btn.refresh"))
         self._refresh_btn.clicked.connect(self._on_refresh_clicked)
-        self._clear_btn = QPushButton('确认清空')
+        self._clear_btn = QPushButton(i18n("btn.confirm_clear"))
         self._clear_btn.clicked.connect(self._on_clear_clicked)
-        self._close_btn = QPushButton('关闭')
+        self._close_btn = QPushButton(i18n("btn.close"))
         self._close_btn.clicked.connect(self.close)
         btn_layout.addStretch()
         btn_layout.addWidget(self._refresh_btn)
         btn_layout.addWidget(self._clear_btn)
         btn_layout.addWidget(self._close_btn)
         layout.addLayout(btn_layout)
+        
+        _sig = i18n_language_changed()
+        if _sig:
+            _sig.connect(self._on_language_changed)
+    
+    def _on_language_changed(self, lang):
+        self.setWindowTitle(i18n("dialog.diag_log_manage"))
+        self._table.setHorizontalHeaderLabels([i18n("header.log_name"), i18n("header.file_size"), i18n("header.current_level"), i18n("header.clear")])
+        self._refresh_btn.setText(i18n("btn.refresh"))
+        self._clear_btn.setText(i18n("btn.confirm_clear"))
+        self._close_btn.setText(i18n("btn.close"))
+        self._refresh_table()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -81,13 +95,13 @@ class LogManageDialog(QDialog):
                 to_clear.append((row, targets[row]))
 
         if not to_clear:
-            QMessageBox.information(self, '提示', '请勾选需要清空的日志')
+            QMessageBox.information(self, i18n("dialog.hint_title"), i18n("error.please_check_log_to_clear"))
             return
 
         names = ', '.join(t.file_name for _, t in to_clear)
         reply = QMessageBox.question(
-            self, '确认清空',
-            f'将清空以下日志文件的内容:\n{names}\n\n确定继续?',
+            self, i18n("dialog.confirm_clear"),
+            i18n("error.will_clear_logs").format(names),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
@@ -100,5 +114,5 @@ class LogManageDialog(QDialog):
             self._table.item(row, 3).setCheckState(Qt.Unchecked)
 
         if failed:
-            QMessageBox.warning(self, '清空失败', '\n'.join(failed))
+            QMessageBox.warning(self, i18n("error.clear_failed"), chr(10).join(failed))
         self._refresh_table()

@@ -34,8 +34,14 @@ from ..processors.waveform_processor import WaveformProcessor
 from ..processors.high_speed_waveform_processor import HighSpeedWaveformProcessor
 from .acquisition_state_machine import AcquisitionStateMachine
 from .channel_manager import ChannelManager
+from .flash_controller import FlashController
+from .path_linkage_controller import PathLinkageController
+from ..service.flash_service import FlashService
 from ..models.channel_config import ChannelRoute
+from ..i18n import _ as i18n
+from ..ui.main_window import STATUS_DISCONNECTED, STATUS_CONNECTING, STATUS_CONNECTED, STATUS_READY, STATUS_LOADING_BACKEND, STATUS_INITIALIZING, STATUS_DISCONNECTING, STATUS_ERROR, STATUS_WARNING
 import sys
+import os
 
 
 class _ConnectWorker(QThread):
@@ -104,7 +110,10 @@ class MainController(QObject):
         _t0 = _time.perf_counter()
 
         self.config_service = ConfigService()
+        from ..i18n import init as i18n_init
+        i18n_init(config_service=self.config_service)
         self.window = MainWindow()
+        self.window._save_geometry_callback = self._save_window_geometry
         self._load_config()
         _t1 = _time.perf_counter()
 
@@ -170,6 +179,8 @@ class MainController(QObject):
         if hasattr(self.window, 'keyword_highlight_action'):
             self.window.keyword_highlight_action.toggled.connect(self._on_keyword_highlight_toggled)
         self.window._pin_btn.toggled.connect(self._on_pin_save)
+        if hasattr(self.window, 'reset_config_requested'):
+            self.window.reset_config_requested.connect(self._on_reset_config)
 
     def _connect_service_signals(self):
         """Phase 2 信号连接：需要业务服务已就绪。"""
@@ -191,7 +202,9 @@ class MainController(QObject):
 
         self.log_processor.text_updated.connect(self._on_log_text_updated)
         self.waveform_processor.waveform_updated.connect(self._on_waveform_updated)
+        self.waveform_processor.waveform_updated_sub.connect(self._on_waveform_updated_sub)
         self._hs_processor.waveform_updated.connect(self._on_hs_waveform_updated)
+        self._hs_processor.waveform_updated_sub.connect(self._on_hs_waveform_updated_sub)
         self._hs_processor.frequency_updated.connect(self._on_hs_frequency_updated)
 
         self.receive_service.data_received.connect(self._on_data_received_dispatch)
@@ -215,6 +228,9 @@ class MainController(QObject):
 
         self._connect_channel_signals()
 
+        # 烧录功能信号连接
+        self._connect_flash_signals()
+
     def _connect_channel_signals(self):
         """连接 ChannelPanel、ChannelManager、WaveformWidget 之间的信号。"""
         panel = self.window.channel_panel
@@ -229,8 +245,89 @@ class MainController(QObject):
 
         panel.channel_enabled_changed.connect(cm.set_channel_enabled)
 
+        panel.channel_color_changed.connect(lambda *args: self._save_channel_config())
+        panel.channel_style_changed.connect(lambda *args: self._save_channel_config())
+        panel.channel_vdiv_changed.connect(lambda *args: self._save_channel_config())
+        panel.channel_yoffset_changed.connect(lambda *args: self._save_channel_config())
+        panel.channel_enabled_changed.connect(lambda *args: self._save_channel_config())
+        panel.channel_enabled_changed.connect(lambda *args: panel._update_color_tags())
+
         cm.channel_added.connect(self._on_channel_added)
         cm.channel_removed.connect(self._on_channel_removed)
+
+    def _connect_flash_signals(self):
+        """连接烧录功能相关信号。"""
+        self.window.flash_requested.connect(self._on_flash_requested)
+        self._flash_controller.flash_started.connect(self._on_flash_started)
+        self._flash_controller.flash_finished.connect(self._on_flash_finished)
+        self._flash_controller.flash_button_state_changed.connect(self._on_flash_button_state_changed)
+        self._flash_service.flash_progress.connect(self._on_flash_progress)
+
+        # 恢复固件路径配置并更新烧录按钮状态
+        firmware_paths = self.config_service.get('firmware_paths', [])
+        active_index = self.config_service.get('active_firmware_index', -1)
+        if firmware_paths and 0 <= active_index < len(firmware_paths):
+            self.window.set_flash_button_enabled(True)
+
+    def _on_flash_requested(self):
+        """烧录按钮点击处理。"""
+        firmware_paths = self.config_service.get('firmware_paths', [])
+        active_index = self.config_service.get('active_firmware_index', -1)
+        firmware_path = ''
+        if 0 <= active_index < len(firmware_paths):
+            firmware_path = firmware_paths[active_index]
+        if not firmware_path:
+            self.log_service.warning("烧录请求失败: 无有效固件路径")
+            return
+        debugger_type = self.config_service.get('debugger_type', 'jlink')
+        self.log_service.info(f"烧录请求: firmware={firmware_path}, debugger_type={debugger_type}")
+        self._flash_controller.request_flash(firmware_path)
+
+    def _on_flash_started(self):
+        """烧录开始。"""
+        firmware_paths = self.config_service.get('firmware_paths', [])
+        active_index = self.config_service.get('active_firmware_index', -1)
+        firmware_path = ''
+        if 0 <= active_index < len(firmware_paths):
+            firmware_path = firmware_paths[active_index]
+        firmware_name = os.path.basename(firmware_path) if firmware_path else ''
+        debugger_type = self.config_service.get('debugger_type', 'jlink')
+        chip_model = self.config_service.get('last_device', '') or self.config_service.get('device', '')
+        from ..ui.flash_progress_dialog import FlashProgressDialog
+        self._flash_dialog = FlashProgressDialog(firmware_name, debugger_type, chip_model, self.window)
+        self._flash_dialog.show()
+
+    def _on_flash_progress(self, text: str):
+        """烧录进度更新。"""
+        if self._flash_dialog:
+            self._flash_dialog.append_log(text)
+
+    def _on_flash_finished(self, success: bool, error_msg: str):
+        """烧录完成。"""
+        if self._flash_dialog:
+            self._flash_dialog.set_result(success)
+
+
+    def _on_flash_button_state_changed(self, enabled: bool):
+        """烧录按钮状态变更。"""
+        if enabled:
+            firmware_paths = self.config_service.get('firmware_paths', [])
+            active_index = self.config_service.get('active_firmware_index', -1)
+            has_path = 0 <= active_index < len(firmware_paths) and bool(firmware_paths[active_index])
+            self.window.set_flash_button_enabled(has_path)
+        else:
+            self.window.set_flash_button_enabled(False)
+
+    def _on_firmware_active_path_changed(self, path: str):
+        """固件激活路径变更（由配置对话框触发）。"""
+        if not self._flash_controller.is_flashing():
+            self.window.set_flash_button_enabled(bool(path))
+
+    def _on_firmware_paths_persist(self, paths: list, active_index: int):
+        """固件路径持久化。"""
+        self.config_service.set('firmware_paths', paths)
+        self.config_service.set('active_firmware_index', active_index)
+        self.config_service.save()
 
         cm.channel_added.connect(lambda ch: panel.add_channel_card(
             ch, cm.get_channel_config(ch).to_dict() if cm.get_channel_config(ch) else None))
@@ -286,7 +383,7 @@ class MainController(QObject):
             traceback.print_exc()
             if self.log_service:
                 self.log_service.error(err)
-            self.window.set_status(err)
+            self.window.set_status(STATUS_ERROR, err)
 
     def _init_phase2_impl(self):
         """Phase 2 实际初始化逻辑（被 _init_phase2 的 try/except 包裹）。"""
@@ -303,7 +400,7 @@ class MainController(QObject):
         self.device_info_service = DeviceInfoService(log_service=self.log_service)
         self.window.device_info_service = self.device_info_service
 
-        self.window.set_status("正在加载调试器后端...")
+        self.window.set_status(STATUS_LOADING_BACKEND)
         QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
         self.debugger_manager = DebuggerManager(log_service=self.log_service)
@@ -313,7 +410,7 @@ class MainController(QObject):
         self.send_service = DataSendService()
         _t2 = _time.perf_counter()
 
-        self.window.set_status("正在初始化处理器...")
+        self.window.set_status(STATUS_INITIALIZING)
         QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
         self.log_processor = LogProcessor(log_service=self.log_service)
@@ -335,6 +432,13 @@ class MainController(QObject):
 
         self._acquisition_sm = AcquisitionStateMachine()
         self._channel_manager = ChannelManager()
+
+        # 烧录功能初始化
+        self._flash_service = FlashService(log_service=self.log_service)
+        self._flash_controller = FlashController(self._flash_service, self.config_service, self.log_service, parent_window=self.window)
+        self._path_linkage_controller = PathLinkageController(self.config_service, self.log_service)
+        self._flash_dialog = None
+
         _t4 = _time.perf_counter()
 
         self._connect_service_signals()
@@ -345,7 +449,7 @@ class MainController(QObject):
         self.window.waveform_widget.set_config_service(self.config_service)
         self.window.restore_display_mode()
 
-        self.window.set_status("就绪")
+        self.window.set_status(STATUS_READY)
         _t5 = _time.perf_counter()
         _labels = self._INIT_PHASE2_LABELS
         _durs = [(_t1-_t0), (_t2-_t1), (_t3-_t2), (_t4-_t3), (_t5-_t4)]
@@ -357,19 +461,19 @@ class MainController(QObject):
     def _on_connect_requested(self, config):
         """连接请求"""
         if not self.connection_service:
-            self.window.set_status("正在初始化...")
+            self.window.set_status(STATUS_INITIALIZING)
             return
         from datetime import datetime
         if self.log_service:
             self.log_service.debug(f"[性能] 开始连接请求: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
         
-        self.window.set_status("连接中")
+        self.window.set_status(STATUS_CONNECTING)
         self._updated_rtt_address = None
         
         # MAP文件前置校验
         is_valid, rtt_address, error_msg = self._validate_map_file(config)
         if not is_valid:
-            self.window.set_status(f"连接失败: {error_msg}")
+            self.window.set_status(STATUS_ERROR, error_msg)
             if self.log_service:
                 self.log_service.error(error_msg)
             return
@@ -476,7 +580,7 @@ class MainController(QObject):
 
                 # 更新UI状态
                 self.window.set_connected(True)
-                self.window.set_status("已连接")
+                self.window.set_status(STATUS_CONNECTED)
 
                 # 保存更新的RTT地址
                 if self._updated_rtt_address:
@@ -487,10 +591,10 @@ class MainController(QObject):
                         self.log_service.info(f"已保存更新后的RTT地址到配置: {self._updated_rtt_address}")
             else:
                 self.window.set_connected(False)
-                self.window.set_status("连接失败")
+                self.window.set_status(STATUS_ERROR, i18n("status.connect_failed"))
         else:
             self.window.set_connected(False)
-            self.window.set_status("连接失败")
+            self.window.set_status(STATUS_ERROR, i18n("status.connect_failed"))
 
         self._connect_worker = None
         self._pending_connect_config = None
@@ -499,7 +603,7 @@ class MainController(QObject):
         """连接Worker错误回调"""
         if self.log_service:
             self.log_service.error(f"连接错误: {error_msg}")
-        self.window.set_status(f"连接失败: {error_msg}")
+        self.window.set_status(STATUS_ERROR, error_msg)
 
     def _on_connect_timeout(self):
         """连接超时回调"""
@@ -518,7 +622,7 @@ class MainController(QObject):
                         f"连接工作线程在超时后未能及时退出，将继续在后台完成")
 
         self.window.set_connected(False)
-        self.window.set_status(f"连接超时({timeout}s)")
+        self.window.set_status(STATUS_ERROR, f"{i18n('status.connect_timeout')}({timeout}s)")
         if self.log_service:
             self.log_service.error(f"连接超时: {timeout}秒内未完成连接")
 
@@ -533,7 +637,7 @@ class MainController(QObject):
         
         if not last_config:
             # 如果没有上次配置,提示用户先配置
-            self.window.set_status("请先配置连接参数")
+            self.window.set_status(STATUS_DISCONNECTED, i18n("status.please_config"))
             return
         
         # 构建完整的配置
@@ -562,7 +666,7 @@ class MainController(QObject):
         if (config.get('debugger_type', 'jlink') == 'jlink'
                 and not config.get('serial_number')
                 and not config.get('ip_address')):
-            self.window.set_status("请先在配置页面刷新探针并选择")
+            self.window.set_status(STATUS_DISCONNECTED, i18n("status.please_select_probe"))
             if self.log_service:
                 self.log_service.warning("未选择J-Link探针，请在配置页面刷新探针列表后选择")
             return
@@ -572,7 +676,7 @@ class MainController(QObject):
     
     def _on_disconnect_requested(self):
         """断开连接请求 - 异步执行避免UI阻塞"""
-        self.window.set_status("正在断开...")
+        self.window.set_status(STATUS_DISCONNECTING)
         self.window.set_connected(False)
         self._use_high_speed = False
         self._hs_bridge.stop_requested.emit()
@@ -584,7 +688,7 @@ class MainController(QObject):
 
         def _on_disconnect_done():
             self.window._jlink_ref = None
-            self.window.set_status("未连接")
+            self.window.set_status(STATUS_DISCONNECTED)
             self._rate_timer.start()
 
         self._disconnect_worker.finished.connect(_on_disconnect_done)
@@ -607,14 +711,14 @@ class MainController(QObject):
             if backend is not None:
                 self.window._jlink_ref = None
         self.window.set_connected(True)
-        self.window.set_status("已连接")
+        self.window.set_status(STATUS_CONNECTED)
         self._auto_detect_jscope_format()
     
     def _on_disconnected(self):
         """断开连接"""
         self.window._jlink_ref = None
         self.window.set_connected(False)
-        self.window.set_status("未连接")
+        self.window.set_status(STATUS_DISCONNECTED)
     
     def _on_send_requested(self, text, is_hex, add_newline):
         """发送请求"""
@@ -628,7 +732,7 @@ class MainController(QObject):
             self.log_service.add_log(f"发送数据: {text[:50]}{'...' if len(text) > 50 else ''} (模式: {'HEX' if is_hex else '字符串'})", 'INFO')
         except Exception as e:
             self.log_service.add_log(f"发送失败: {str(e)}", 'ERROR')
-            self.window.set_status(f"发送失败: {str(e)}")
+            self.window.set_status(STATUS_ERROR, str(e))
     
     def _on_data_sent(self, num_bytes):
         """数据发送完成"""
@@ -650,6 +754,12 @@ class MainController(QObject):
             panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
             if panel:
                 panel.set_channel_active(channel, True)
+                dfc = self.waveform_processor.get_data_field_count(channel)
+                if dfc > 1:
+                    for sub_ch_id in self.waveform_processor.get_sub_channel_ids(channel):
+                        sub_key = sub_ch_id.to_signal_key()
+                        if sub_key in panel._cards:
+                            panel._cards[sub_key].set_active(True)
             self._channel_last_active[channel] = __import__('time').perf_counter()
             if channel not in self.waveform_processor._channel_jscope_fields:
                 self._discover_channel_format(channel)
@@ -674,6 +784,12 @@ class MainController(QObject):
             panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
             if panel:
                 panel.set_channel_active(channel, True)
+                dfc = self.waveform_processor.get_data_field_count(channel)
+                if dfc > 1:
+                    for sub_ch_id in self.waveform_processor.get_sub_channel_ids(channel):
+                        sub_key = sub_ch_id.to_signal_key()
+                        if sub_key in panel._cards:
+                            panel._cards[sub_key].set_active(True)
             self._channel_last_active[channel] = __import__('time').perf_counter()
             if channel not in self.waveform_processor._channel_jscope_fields:
                 self._discover_channel_format(channel)
@@ -735,6 +851,18 @@ class MainController(QObject):
         
         self.window.waveform_widget.update_data(channel, timestamps, values)
 
+    def _on_waveform_updated_sub(self, sub_ch_id, timestamps, values):
+        """子通道波形数据更新（普通处理器 - 合并buffer模式）"""
+        if self._render_paused or self._use_high_speed:
+            return
+        self.window.waveform_widget.update_data(sub_ch_id, timestamps, values)
+
+    def _on_hs_waveform_updated_sub(self, sub_ch_id, timestamps, values):
+        """子通道波形数据更新（高速处理器 - 合并buffer模式）"""
+        if self._render_paused or not self._use_high_speed:
+            return
+        self.window.waveform_widget.update_data(sub_ch_id, timestamps, values)
+
     def _on_hs_frequency_updated(self, channel, frequency):
         """频率更新（高速处理器 - 基于原始数据计算）"""
         if self._render_paused or not self._use_high_speed:
@@ -775,11 +903,11 @@ class MainController(QObject):
             self.log_service.add_log(error_msg, log_type)
         elif any(error_msg.startswith(p) for p in ('环形缓冲区已满', '通道')) or '读取错误' in error_msg:
             log_type = 'WARNING'
-            self.window.set_status(f"警告: {error_msg}")
+            self.window.set_status(STATUS_WARNING, error_msg)
             self.log_service.add_log(f"警告: {error_msg}", log_type)
         else:
             log_type = 'ERROR'
-            self.window.set_status(f"错误: {error_msg}")
+            self.window.set_status(STATUS_ERROR, error_msg)
             self.log_service.add_log(f"错误: {error_msg}", log_type)
     
     def _connect_log_service(self):
@@ -849,7 +977,168 @@ class MainController(QObject):
         if topmost:
             self.window.setWindowFlag(Qt.WindowStaysOnTopHint, True)
             self.window.show()
+
+        # 恢复窗口尺寸和位置
+        win_w = self.config_service.get('window_width', 1200)
+        win_h = self.config_service.get('window_height', 800)
+        win_x = self.config_service.get('window_x', None)
+        win_y = self.config_service.get('window_y', None)
+        self.window.resize(win_w, win_h)
+        if win_x is not None and win_y is not None:
+            self.window.move(win_x, win_y)
+        if self.config_service.get('window_maximized', False):
+            self.window.showMaximized()
+
+        # 恢复工具栏位置
+        toolbar_area = self.config_service.get('toolbar_area', None)
+        if toolbar_area is not None and hasattr(self.window, '_toolbar'):
+            try:
+                from PyQt5.QtCore import Qt
+                area_map = {
+                    1: Qt.LeftToolBarArea,
+                    2: Qt.RightToolBarArea,
+                    4: Qt.TopToolBarArea,
+                    8: Qt.BottomToolBarArea,
+                }
+                target_area = area_map.get(toolbar_area)
+                if target_area is not None:
+                    current_area = self.window.toolBarArea(self.window._toolbar)
+                    if current_area != target_area:
+                        tb = self.window._toolbar
+                        self.window.removeToolBar(tb)
+                        self.window.addToolBar(target_area, tb)
+                        tb.show()
+            except Exception:
+                pass
+
+        self._load_channel_config()
     
+    def _apply_sub_channel_config(self, channel: int):
+        """子通道创建后，从config.json恢复其配置"""
+        sub_channel_configs = self.config_service.get('sub_channel_configs', {})
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+        if not panel:
+            return
+
+        for sub_key_str, cfg in sub_channel_configs.items():
+            parts = sub_key_str.split(',')
+            if len(parts) == 2:
+                try:
+                    sub_key = (int(parts[0]), int(parts[1]))
+                except ValueError:
+                    continue
+                if sub_key[0] != channel:
+                    continue
+                if sub_key in panel._cards:
+                    card = panel._cards[sub_key]
+                    info = {}
+                    if 'color' in cfg:
+                        info['color'] = cfg['color']
+                    if 'style' in cfg:
+                        info['style'] = cfg['style']
+                    if 'vdiv' in cfg:
+                        info['vdiv'] = cfg['vdiv']
+                    if 'yoffset' in cfg:
+                        info['yoffset'] = cfg['yoffset']
+                    if 'enabled' in cfg:
+                        info['enabled'] = cfg['enabled']
+                    if info:
+                        card.set_channel_info(info)
+                    if 'color' in cfg:
+                        from ..models.sub_channel_id import SubChannelId
+                        sub_ch_id = SubChannelId(
+                            rtt_channel=sub_key[0], field_index=sub_key[1],
+                            field_label="", rtt_channel_name="")
+                        self.window.waveform_widget.set_channel_color(sub_ch_id, cfg['color'])
+
+    def _load_channel_config(self):
+        """从config.json加载通道和子通道配置"""
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+        if not panel:
+            return
+
+        channel_configs = self.config_service.get('channel_configs', {})
+        sub_channel_configs = self.config_service.get('sub_channel_configs', {})
+
+        for ch in range(1, 11):
+            ch_key = str(ch)
+            if ch_key in channel_configs:
+                cfg = channel_configs[ch_key]
+                if ch in panel._cards:
+                    card = panel._cards[ch]
+                    info = {}
+                    if 'color' in cfg:
+                        info['color'] = cfg['color']
+                    if 'style' in cfg:
+                        info['style'] = cfg['style']
+                    if 'vdiv' in cfg:
+                        info['vdiv'] = cfg['vdiv']
+                    if 'yoffset' in cfg:
+                        info['yoffset'] = cfg['yoffset']
+                    if 'enabled' in cfg:
+                        info['enabled'] = cfg['enabled']
+                    if info:
+                        card.set_channel_info(info)
+                    if 'color' in cfg:
+                        self.window.waveform_widget.set_channel_color(ch, cfg['color'])
+
+        for sub_key_str, cfg in sub_channel_configs.items():
+            parts = sub_key_str.split(',')
+            if len(parts) == 2:
+                try:
+                    sub_key = (int(parts[0]), int(parts[1]))
+                except ValueError:
+                    continue
+                if sub_key in panel._cards:
+                    card = panel._cards[sub_key]
+                    info = {}
+                    if 'color' in cfg:
+                        info['color'] = cfg['color']
+                    if 'style' in cfg:
+                        info['style'] = cfg['style']
+                    if 'vdiv' in cfg:
+                        info['vdiv'] = cfg['vdiv']
+                    if 'yoffset' in cfg:
+                        info['yoffset'] = cfg['yoffset']
+                    if 'enabled' in cfg:
+                        info['enabled'] = cfg['enabled']
+                    if info:
+                        card.set_channel_info(info)
+                    if 'color' in cfg:
+                        from ..models.sub_channel_id import SubChannelId
+                        sub_ch_id = SubChannelId(
+                            rtt_channel=sub_key[0], field_index=sub_key[1],
+                            field_label="", rtt_channel_name="")
+                        self.window.waveform_widget.set_channel_color(sub_ch_id, cfg['color'])
+
+    def _save_channel_config(self):
+        """保存通道和子通道配置到config.json"""
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+        if not panel:
+            return
+
+        channel_configs = {}
+        sub_channel_configs = {}
+
+        for ch, card in panel._cards.items():
+            info = card.get_channel_info()
+            cfg = {
+                'color': info.get('color', '#00FF00'),
+                'style': info.get('style', 0),
+                'vdiv': info.get('vdiv', 1.0),
+                'yoffset': info.get('yoffset', 0.0),
+                'enabled': info.get('enabled', False),
+            }
+            if isinstance(ch, int):
+                channel_configs[str(ch)] = cfg
+            elif isinstance(ch, tuple):
+                sub_key_str = f"{ch[0]},{ch[1]}"
+                sub_channel_configs[sub_key_str] = cfg
+
+        self.config_service.set('channel_configs', channel_configs)
+        self.config_service.set('sub_channel_configs', sub_channel_configs)
+        self.config_service.save()
+
     def _on_config_changed(self, config):
         """配置改变"""
         # 保存调试器类型
@@ -906,6 +1195,19 @@ class MainController(QObject):
             self.config_service.set('probe_backend', config['probe_backend'])
         if 'probe_serial' in config:
             self.config_service.set('probe_serial', config['probe_serial'])
+
+        # 保存固件路径
+        if 'firmware_paths' in config:
+            self.config_service.set('firmware_paths', config['firmware_paths'])
+        if 'active_firmware_index' in config:
+            self.config_service.set('active_firmware_index', config['active_firmware_index'])
+
+        # 更新烧录按钮状态
+        firmware_paths = self.config_service.get('firmware_paths', [])
+        active_index = self.config_service.get('active_firmware_index', -1)
+        has_path = 0 <= active_index < len(firmware_paths) and bool(firmware_paths[active_index])
+        if not self._flash_controller.is_flashing():
+            self.window.set_flash_button_enabled(has_path)
         
         # 保存到文件
         self.config_service.save()
@@ -934,6 +1236,43 @@ class MainController(QObject):
         self.config_service.set('window_topmost', checked)
         self.config_service.save()
 
+    def _on_reset_config(self):
+        from PyQt5.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self.window, i18n("menu.reset_config"),
+            "确定要恢复所有配置为默认值吗？\n软件将重启以使配置生效。",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self._save_window_geometry()
+            self.config_service.reset_to_default()
+            import sys
+            import os
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+
+    def _save_window_geometry(self):
+        is_maximized = self.window.isMaximized()
+        self.config_service.set('window_maximized', is_maximized)
+        if not is_maximized:
+            geo = self.window.geometry()
+            self.config_service.set('window_width', geo.width())
+            self.config_service.set('window_height', geo.height())
+            self.config_service.set('window_x', geo.x())
+            self.config_service.set('window_y', geo.y())
+        else:
+            geo = self.window.normalGeometry()
+            self.config_service.set('window_width', geo.width())
+            self.config_service.set('window_height', geo.height())
+            self.config_service.set('window_x', geo.x())
+            self.config_service.set('window_y', geo.y())
+        if hasattr(self.window, '_toolbar'):
+            try:
+                area = int(self.window.toolBarArea(self.window._toolbar))
+                self.config_service.set('toolbar_area', area)
+            except Exception:
+                pass
+        self.config_service.save()
+
     def _on_font_changed(self, font):
         from PyQt5.QtGui import QFont
         self.config_service.set('font_family', font.family())
@@ -960,6 +1299,7 @@ class MainController(QObject):
                         if name and name.startswith("JScope_"):
                             self.waveform_processor.set_channel_jscope_format(ch_idx, name)
                             self._hs_processor.set_channel_jscope_format(ch_idx, name)
+                            self._ensure_sub_channels_created(ch_idx, name)
                     except Exception:
                         continue
                 for ch_idx in range(10):
@@ -987,6 +1327,7 @@ class MainController(QObject):
                         if name.startswith("JScope_"):
                             self.waveform_processor.set_channel_jscope_format(ch_idx, name)
                             self._hs_processor.set_channel_jscope_format(ch_idx, name)
+                            self._ensure_sub_channels_created(ch_idx, name)
                     try:
                         buf_size = getattr(ch, 'size', 0) or 0
                         if buf_size > 0:
@@ -1037,7 +1378,7 @@ class MainController(QObject):
 
     def _on_acquisition_start(self) -> None:
         if not self.connection_service.is_connected:
-            self.window.set_status("请先连接设备")
+            self.window.set_status(STATUS_DISCONNECTED, i18n("status.please_connect"))
             if self.log_service:
                 self.log_service.warning("[示波器] 无法启动采集: 设备未连接")
             return
@@ -1173,7 +1514,8 @@ class MainController(QObject):
         panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
         if panel:
             for ch, card in panel._cards.items():
-                card.set_format_text(text)
+                if not hasattr(card, '_format_label') or card._format_label.text() in ('', i18n("label.auto_detect_format")):
+                    card.set_format_text(text)
 
     def _update_channel_mcu_buf(self, channel: int, size: int, name: str = ""):
         panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
@@ -1214,16 +1556,92 @@ class MainController(QObject):
             if name and name.startswith("JScope_"):
                 self.waveform_processor.set_channel_jscope_format(channel, name)
                 self._hs_processor.set_channel_jscope_format(channel, name)
+                self._ensure_sub_channels_created(channel, name)
                 if self.log_service:
                     self.log_service.info(f"[通道格式] CH{channel}: {name}")
+                format_str = name[len("JScope_"):]
+                panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+                if panel and channel in panel._cards:
+                    panel._cards[channel].set_format_text(format_str)
         except Exception:
             pass
+
+    def _ensure_sub_channels_created(self, channel: int, channel_name: str):
+        """合并buffer模式下，确保子通道波形曲线和ChannelPanel卡片已创建。"""
+        from ..models.sub_channel_id import SubChannelId
+        from ..processors.jscope_parser import parse_channel_name
+
+        parse_result = parse_channel_name(channel_name)
+        if not parse_result or parse_result['data_field_count'] <= 1:
+            return
+
+        sub_names = parse_result.get('sub_channel_names', [])
+        data_fields = [f for f in parse_result['fields'] if not f.get('is_timestamp')]
+        format_str = channel_name[len("JScope_"):] if channel_name.startswith("JScope_") else ""
+
+        panel = self.window.channel_panel if hasattr(self.window, 'channel_panel') else None
+
+        if parse_result['data_field_count'] == 1:
+            sub_ch_id = SubChannelId(
+                rtt_channel=channel, field_index=0,
+                field_label=data_fields[0]['label'] if data_fields else "",
+                rtt_channel_name=channel_name
+            )
+            self.window.waveform_widget.add_channel(sub_ch_id, name=f"CH{channel}")
+            if panel and channel in panel._cards:
+                panel._cards[channel].set_format_text(format_str)
+            if self.log_service:
+                self.log_service.info(f"[子通道] CH{channel}: 单字段，直接使用母通道显示")
+            return
+
+        parent_color = None
+        if panel and channel in panel._cards:
+            parent_info = panel._cards[channel].get_channel_info()
+            parent_color = parent_info.get('color')
+            panel._cards[channel].set_disabled(True)
+
+        for fi in range(parse_result['data_field_count']):
+            sub_ch_id = SubChannelId(
+                rtt_channel=channel,
+                field_index=fi,
+                field_label=data_fields[fi]['label'] if fi < len(data_fields) else "",
+                rtt_channel_name=channel_name
+            )
+            sub_suffix = sub_names[fi] if fi < len(sub_names) else f"[{fi + 1}]"
+            display_name = f"CH{channel}{sub_suffix}"
+            self.window.waveform_widget.add_channel(sub_ch_id, name=display_name)
+
+            if panel is not None:
+                key = sub_ch_id.to_signal_key()
+                if key not in panel._cards:
+                    card_info = {
+                        'name': display_name,
+                        'enabled': False,
+                    }
+                    panel.add_channel_card(key, card_info)
+                    card = panel._cards.get(key)
+                    if card:
+                        card.set_format_text(data_fields[fi]['label'] if fi < len(data_fields) else "")
+                        color = self.window.waveform_widget._get_channel_color(sub_ch_id)
+                        card.set_color(color)
+
+        self._apply_sub_channel_config(channel)
+
+        parent_card = panel._cards.get(channel) if panel else None
+        if parent_card:
+            parent_card.set_format_text(format_str)
+
+        if self.log_service:
+            self.log_service.info(
+                f"[子通道] CH{channel}({channel_name}): 创建{parse_result['data_field_count']}个子通道 "
+                f"- {sub_names}")
 
     def show(self):
         """显示窗口（窗口已在 __init__ 中显示）"""
         pass
 
     def _cleanup(self):
+        self._save_window_geometry()
         if self._hs_processor:
             self._hs_processor.stop()
         if self._rate_timer:
